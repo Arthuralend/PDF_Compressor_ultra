@@ -76,7 +76,7 @@ for name in sorted(os.listdir(FIX)):
             continue
         try:
             with pikepdf.open(dst) as pdf:
-                problems = pdf.check()
+                problems = (pdf.check_pdf_syntax() if hasattr(pdf, "check_pdf_syntax") else pdf.check())
                 n = len(pdf.pages)
             if problems:
                 failures.append(f"{name} [{cfg}]: qpdf check: {problems[:3]}")
