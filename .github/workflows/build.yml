@@ -1,5 +1,8 @@
 name: Build & test (macOS Apple Silicon)
 
+permissions:
+  contents: write
+
 on:
   push:
   pull_request:
@@ -7,7 +10,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14   # Apple Silicon (M1)
+    runs-on: macos-15   # Apple Silicon
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +37,17 @@ jobs:
 
       - name: Verify compression
         run: python3 Tests/verify.py dist/pdfcu out/fixtures out/results
+
+      - name: Publish DMG (release "latest-build")
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest-build --yes --cleanup-tag || true
+          gh release create latest-build dist/*.dmg dist/*.zip \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "PDF Compressor Ultra — последняя сборка" \
+            --notes "Сборка для Apple Silicon (M1/M2/M3/M4), коммит $GITHUB_SHA. Первый запуск: правый клик → Открыть."
 
       - name: Upload app
         if: always()
