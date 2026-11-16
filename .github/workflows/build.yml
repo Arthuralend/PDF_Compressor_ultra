@@ -42,3 +42,28 @@ jobs:
           name: PDF-Compressor-Ultra-arm64
           path: dist/*.zip
           if-no-files-found: ignore
+
+  # The PDF engine and CLI are platform-independent; this job compile-checks and
+  # tests them on Linux (no ImageIO there: JPEG/JPEG 2000 decoding and
+  # encryption are macOS-only, so those cases are skipped).
+  linux-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain info
+        run: swift --version
+      - name: Cache jpegli
+        uses: actions/cache@v4
+        with:
+          path: Vendor/jpegli
+          key: jpegli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Scripts/build_jpegli.sh') }}
+      - name: Build jpegli
+        run: ./Scripts/build_jpegli.sh
+      - name: Build CLI
+        run: swift build -c release --product pdfcu
+      - name: Test dependencies
+        run: python3 -m pip install --break-system-packages -q reportlab pillow numpy pikepdf pypdfium2 pypdf
+      - name: Generate fixtures
+        run: python3 Tests/make_fixtures.py out/fixtures
+      - name: Verify compression
+        run: python3 Tests/verify.py "$(swift build -c release --show-bin-path)/pdfcu" out/fixtures out/results

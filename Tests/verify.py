@@ -60,6 +60,9 @@ rows = []
 for name in sorted(os.listdir(FIX)):
     if not name.endswith(".pdf"):
         continue
+    if sys.platform.startswith("linux") and name.startswith("enc_"):
+        print(f"skip {name}: decryption needs CommonCrypto (macOS)")
+        continue
     src = os.path.join(FIX, name)
     pw = PASSWORDS.get(name)
     ref_pages = render(src, pw)
