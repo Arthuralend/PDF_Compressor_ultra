@@ -40,7 +40,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PDF-Compressor-Ultra-arm64
-          path: dist/*.zip
+          path: |
+            dist/*.dmg
+            dist/*.zip
           if-no-files-found: ignore
 
   # The PDF engine and CLI are platform-independent; this job compile-checks and

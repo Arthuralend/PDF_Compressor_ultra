@@ -63,4 +63,13 @@ PLIST
 codesign --force --deep --sign - "$APP"
 cp "$BIN/pdfcu" dist/pdfcu
 (cd dist && ditto -c -k --keepParent "$APP_NAME.app" "PDF-Compressor-Ultra-$VERSION-arm64.zip")
+# DMG with a drag-to-Applications layout
+DMG="dist/PDF-Compressor-Ultra-$VERSION-arm64.dmg"
+STAGE="$(mktemp -d)"
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+rm -f "$DMG"
+hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+rm -rf "$STAGE"
 echo "✅ Готово: $ROOT/$APP"
+echo "💿 DMG:    $ROOT/$DMG"
