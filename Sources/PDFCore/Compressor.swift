@@ -119,7 +119,7 @@ public enum PDFCompressor {
                 report.skipped["выбрано «не сжимать»", default: 0] += 1
                 let w = doc.resolve(s.dict["Width"] ?? .null).intValue ?? 0
                 let h = doc.resolve(s.dict["Height"] ?? .null).intValue ?? 0
-                report.imageLog.append("#\(num) \(w)×\(h): без изменений — выбрано «не сжимать»")
+                report.imageLog.append("#\(num) \(formatName(filters.last)) \(w)×\(h) → без изменений: выбрано «не сжимать»")
                 continue
             }
             if isImage {
@@ -559,16 +559,38 @@ public enum PDFCompressor {
             return JobResult(num: num, stream: ns, isImage: false, downsampled: false, log: nil, skipReason: nil)
         case .image(let j):
             let outcome = recompressImage(j, settings: settings)
+            let size = { (n: Int) -> String in n >= 1024 ? "\(n / 1024) КБ" : "\(n) Б" }
             let ppiText = j.ppi.map { "\(Int($0.rounded())) ppi" } ?? "не найдено на страницах"
-            let codec = j.filters.last ?? "без сжатия"
-            let head = "#\(j.num) \(j.width)×\(j.height) \(codec), \(ppiText)"
+            let colorText: String
+            switch j.color {
+            case .some(.indexed): colorText = "палитра"
+            case .some(let c): colorText = c.outputComponents == 1 ? (j.bpc == 1 ? "1 бит" : "серый")
+                                         : (c.outputComponents == 4 ? "CMYK" : "цвет")
+            case .none: colorText = j.imageMask ? "маска" : ""
+            }
+            let before = "\(formatName(j.filters.last))\(colorText.isEmpty ? "" : " \(colorText)") \(j.width)×\(j.height), "
+                + "\(ppiText), \(size(j.stream.data.count))"
+            let head = "#\(j.num) \(before)"
             switch outcome {
             case .success(let r):
                 var r = r
-                let bw = r.stream?.dict.name("Filter") == "JBIG2Decode" ? "JBIG2" : "CCITT G4"
-                let conv = r.conversion == .bilevel ? "ч/б 1 бит (\(bw)), " : (r.conversion == .grayscale ? "в оттенки серого, " : "")
-                let what = conv + (r.downsampled ? "уменьшено до \(r.stream?.dict.int("Width") ?? 0)×\(r.stream?.dict.int("Height") ?? 0)" : "пересжато")
-                r.log = "\(head): \(what), \(j.stream.data.count / 1024) → \((r.stream?.data.count ?? 0) / 1024) КБ"
+                let d = r.stream?.dict
+                let nw = d?.int("Width") ?? j.width, nh = d?.int("Height") ?? j.height
+                var outFormat: String
+                switch d?.name("Filter") {
+                case "DCTDecode": outFormat = ImageCodecs.jpegliAvailable ? "JPEGli" : "JPEG (системный)"
+                case "JBIG2Decode": outFormat = "JBIG2"
+                case "CCITTFaxDecode": outFormat = "CCITT G4"
+                default: outFormat = "без потерь (Flate)"
+                }
+                switch r.conversion {
+                case .some(.bilevel): outFormat += " ч/б 1 бит"
+                case .some(.grayscale): outFormat += " серый"
+                default: if !colorText.isEmpty && colorText != "палитра" { outFormat += " \(colorText)" }
+                }
+                let outPPI = j.ppi.map { " \(Int(($0 * Double(nw) / Double(max(1, j.width))).rounded())) ppi," } ?? ""
+                let q = d?.name("Filter") == "DCTDecode" ? " q\(settings.quality)," : ""
+                r.log = "\(head) → \(outFormat) \(nw)×\(nh),\(outPPI)\(q) \(size(r.stream?.data.count ?? 0))"
                 return r
             case .failure(let reason):
                 // Fall back to lossless recompression of the image data.
@@ -578,8 +600,21 @@ public enum PDFCompressor {
                 }
                 let ns = optimizeLossless(j.stream, filters: j.filters, parms: j.parms, imageInfo: info)
                 return JobResult(num: j.num, stream: ns, isImage: false, downsampled: false,
-                                 log: "\(head): без изменений — \(reason.text)", skipReason: reason.text)
+                                 log: "\(head) → без изменений: \(reason.text)", skipReason: reason.text)
             }
+        }
+    }
+
+    /// Human-readable name of a PDF image filter.
+    static func formatName(_ filter: String?) -> String {
+        switch filter {
+        case "DCTDecode": return "JPEG"
+        case "JPXDecode": return "JPEG 2000"
+        case "JBIG2Decode": return "JBIG2"
+        case "CCITTFaxDecode": return "CCITT"
+        case "FlateDecode", "LZWDecode", "RunLengthDecode": return "без потерь"
+        case nil: return "без сжатия"
+        default: return filter!.replacingOccurrences(of: "Decode", with: "")
         }
     }
 
