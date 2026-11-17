@@ -115,7 +115,7 @@ for name in sorted(os.listdir(FIX)):
         if cfg == "gray":
             limit = 22.0
         if cfg == "bw":
-            limit = 12.0  # thresholding changes the look of scans by design
+            limit = 5.0  # everything becomes 1-bit: photos change look by design
         if worst < limit:
             failures.append(f"{name} [{cfg}]: render PSNR {worst:.1f} dB < {limit}")
         if cfg == "keep-page-2" and len(ref_pages) >= 2:
@@ -132,8 +132,8 @@ for name in sorted(os.listdir(FIX)):
             bilevel = {"/CCITTFaxDecode", "/JBIG2Decode"}
             if name == "doc_scan.pdf" and not (filters & bilevel):
                 failures.append(f"{name} [bw]: text scan was not converted to 1-bit ({filters})")
-            if name in ("scan.pdf", "mixed.pdf") and (filters & bilevel):
-                failures.append(f"{name} [bw]: photo was wrongly converted to 1-bit")
+            if name in ("scan.pdf", "mixed.pdf") and not (filters & bilevel):
+                failures.append(f"{name} [bw]: images were not converted to 1-bit ({filters})")
             if name == "doc_scan.pdf":
                 # Cross-check decoding with MuPDF (jbig2dec) and, on macOS, with Quartz
                 # (Preview), at the native 300 dpi where one image pixel = one device pixel.

@@ -740,7 +740,7 @@ public enum PDFCompressor {
         var converted: ColorMode? = nil
         if wantsGray && !(j.colorMode == .grayscale && raster.components == 1) {
             let gray = raster.toGray(decode: keepDecode ? j.decode : nil)
-            if j.colorMode == .bilevel && (j.bilevelForced || gray.looksLikeText()) {
+            if j.colorMode == .bilevel {
                 let g = gray.resized(width: j.bilevelWidth, height: j.bilevelHeight)
                 let bits = g.binarized()
                 // Lossless JBIG2 is usually ~2x smaller than G4; keep whichever is smaller.

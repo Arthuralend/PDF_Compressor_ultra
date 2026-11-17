@@ -3,7 +3,7 @@ import Foundation
 public enum ColorMode: String, CaseIterable, Identifiable, Sendable, Codable {
     case color
     case grayscale
-    /// 1-bit black & white (CCITT G4) for text scans; photos become grayscale.
+    /// 1-bit black & white (JBIG2 / CCITT G4) for every image.
     case bilevel
 
     public var id: String { rawValue }
@@ -67,8 +67,7 @@ public struct CompressionSettings: Sendable, Codable, Equatable {
     public var protectedImages: Set<Int> = []
     /// Color conversion for the whole document.
     public var colorMode: ColorMode = .color
-    /// Master mode: per-page color mode (0-based page index). For `.bilevel`
-    /// set here, images are made 1-bit even when they look like photos.
+    /// Master mode: per-page color mode (0-based page index).
     public var pageColorModes: [Int: ColorMode] = [:]
     /// Resolution used for 1-bit images.
     public var bilevelDPI: Int = 300
