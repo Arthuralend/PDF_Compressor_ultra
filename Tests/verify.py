@@ -30,7 +30,7 @@ CONFIGS = [
     ("keep-page-2", ["-p", "strong", "--keep-pages", "2"]),
 ]
 # Images in these files must get smaller (resolution really reduced) at "strong".
-MUST_SHRINK = {"mixed.pdf": 0.5, "scan.pdf": 0.5, "cmyk.pdf": 0.5, "objstm.pdf": 0.5}
+MUST_SHRINK = {"mixed.pdf": 0.5, "scan.pdf": 0.5, "cmyk.pdf": 0.5, "objstm.pdf": 0.5, "pattern_images.pdf": 0.5}
 PASSWORDS = {"enc_password.pdf": "secret"}
 
 failures = []
@@ -109,6 +109,14 @@ for name in sorted(os.listdir(FIX)):
         if cfg == "strong" and name in MUST_SHRINK and b > a * MUST_SHRINK[name]:
             failures.append(f"{name} [{cfg}]: only {100 * (1 - b / a):.0f}% smaller — images not downsampled?")
         rows.append((name, cfg, a, b, worst))
+
+# Master mode must see images painted through tiling patterns (macOS Quartz PDFs).
+pat = os.path.join(FIX, "pattern_images.pdf")
+if os.path.exists(pat):
+    out = subprocess.run([PDFCU, pat, "--list-images"], capture_output=True, text=True).stdout
+    print(out)
+    if out.count("ppi") < 2:
+        failures.append("pattern_images.pdf: images inside tiling patterns not found by --list-images")
 
 print(f"{'file':20s} {'config':16s} {'orig KB':>9s} {'new KB':>9s} {'saved':>7s} {'PSNR':>6s}")
 for name, cfg, a, b, q in rows:

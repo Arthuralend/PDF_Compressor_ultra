@@ -114,7 +114,41 @@ for p in range(4):
     c.showPage()
 c.save()
 
-# 7. Damaged xref: break startxref offset
+# 7. macOS Quartz style: images painted through a tiling pattern
+pat = pikepdf.new()
+for idx, (w, h, place) in enumerate([(1948, 1468, (85, 444, 468, 352)), (1429, 2017, (86, 137, 468, 660))]):
+    buf = io.BytesIO()
+    photo(w, h).save(buf, "JPEG", quality=92)
+    img = pikepdf.Stream(pat, buf.getvalue())
+    img.Type = pikepdf.Name.XObject
+    img.Subtype = pikepdf.Name.Image
+    img.Width, img.Height = w, h
+    img.ColorSpace = pikepdf.Name.DeviceRGB
+    img.BitsPerComponent = 8
+    img.Filter = pikepdf.Name.DCTDecode
+    x, y, pw, ph = place
+    tile = pikepdf.Stream(pat, f"q {pw} 0 0 {ph} 0 0 cm /Im1 Do Q".encode())
+    tile.Type = pikepdf.Name.Pattern
+    tile.PatternType = 1
+    tile.PaintType = 1
+    tile.TilingType = 1
+    tile.BBox = [0, 0, pw, ph]
+    tile.XStep = pw * 2
+    tile.YStep = ph * 2
+    tile.Matrix = [1, 0, 0, 1, x, y]
+    tile.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im1=img))
+    content = f"BT /F1 12 Tf 60 810 Td (Pattern page {idx + 1}) Tj ET /Pattern cs /P1 scn {x} {y} {pw} {ph} re f"
+    page = pikepdf.Dictionary(
+        Type=pikepdf.Name.Page, MediaBox=[0, 0, 595.3, 841.9],
+        Resources=pikepdf.Dictionary(
+            Pattern=pikepdf.Dictionary(P1=tile),
+            Font=pikepdf.Dictionary(F1=pikepdf.Dictionary(Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1,
+                                                          BaseFont=pikepdf.Name.Helvetica))),
+        Contents=pikepdf.Stream(pat, content.encode()))
+    pat.pages.append(pikepdf.Page(page))
+pat.save(f"{OUT}/pattern_images.pdf")
+
+# 8. Damaged xref: break startxref offset
 data = open(f"{OUT}/mixed.pdf", "rb").read()
 idx = data.rfind(b"startxref")
 broken = data[:idx] + b"startxref\n123\n%%EOF\n"

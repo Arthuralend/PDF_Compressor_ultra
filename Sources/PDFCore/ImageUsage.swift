@@ -118,6 +118,18 @@ final class ImageUsageAnalyzer {
     private func scan(_ data: [UInt8], resources: PDFDict, depth: Int, into placements: inout [(Int, Matrix)]) {
         guard !data.isEmpty else { return }
         let xobjects = doc.resolveDict(resources["XObject"])
+        let patterns = doc.resolveDict(resources["Pattern"])
+        // Tiling patterns (macOS Quartz / "Save as PDF" paint images this way):
+        // the selected pattern is drawn when an area is filled or stroked.
+        var fillPattern: String? = nil
+        var strokePattern: String? = nil
+        var placedPatterns = Set<String>()
+        func paint(_ name: String?) {
+            guard let n = name, !placedPatterns.contains(n), let p = patterns?[n], doc.stream(p) != nil else { return }
+            placedPatterns.insert(n)
+            // Pattern space is the default space of this content stream, not the CTM.
+            placeForm(p, ctm: .identity, parentResources: resources, depth: depth + 1, into: &placements)
+        }
         var lx = PDFLexer(data)
         var ctm = Matrix.identity
         var stack: [Matrix] = []
@@ -151,6 +163,21 @@ final class ImageUsageAnalyzer {
                             placeForm(xo, ctm: ctm, parentResources: resources, depth: depth + 1, into: &placements)
                         }
                     }
+                case "scn":
+                    if let n = lastName, patterns?[n] != nil { fillPattern = n }
+                case "SCN":
+                    if let n = lastName, patterns?[n] != nil { strokePattern = n }
+                case "cs", "sc", "g", "rg", "k":
+                    if op != "cs" || lastName != "Pattern" { fillPattern = nil }
+                case "CS", "SC", "G", "RG", "K":
+                    if op != "CS" || lastName != "Pattern" { strokePattern = nil }
+                case "f", "F", "f*", "B", "B*", "b", "b*":
+                    paint(fillPattern)
+                    if op.hasPrefix("B") || op.hasPrefix("b") { paint(strokePattern) }
+                case "S", "s":
+                    paint(strokePattern)
+                case "Tj", "TJ", "'", "\"":
+                    paint(fillPattern)
                 case "BI":
                     skipInlineImage(&lx)
                 default:
