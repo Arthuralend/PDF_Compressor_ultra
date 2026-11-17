@@ -101,10 +101,24 @@ public struct PageImageInfo: Sendable, Identifiable, Hashable {
     /// Effective resolution at this placement.
     public var ppi: Double
     public var id: String { "\(objectNumber)@\(x),\(y)" }
+
+    public init(objectNumber: Int, pixelWidth: Int, pixelHeight: Int,
+                x: Double, y: Double, width: Double, height: Double, ppi: Double) {
+        self.objectNumber = objectNumber
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.x = x; self.y = y; self.width = width; self.height = height
+        self.ppi = ppi
+    }
 }
 
 public struct PageImagesInfo: Sendable, Identifiable {
     public var index: Int
     public var images: [PageImageInfo]
     public var id: Int { index }
+
+    public init(index: Int, images: [PageImageInfo]) {
+        self.index = index
+        self.images = images
+    }
 }
