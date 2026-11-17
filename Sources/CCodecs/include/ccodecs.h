@@ -26,11 +26,21 @@ int ccodecs_inflate(const uint8_t *in, size_t in_len,
 /* 1 when the library was built with the jpegli encoder linked in. */
 int ccodecs_jpegli_available(void);
 
-/* Encodes 8-bit interleaved pixels (components = 1 gray or 3 RGB) with jpegli.
-   quality: 1..100. Returns 0 on success; *out must be freed with ccodecs_free. */
+/* Encodes 8-bit interleaved pixels with jpegli (components: 1 gray, 3 RGB,
+   4 CMYK). For CMYK, adobe_marker selects whether an Adobe APP14 marker is
+   written (keep it the same as in the source JPEG so readers interpret the
+   samples identically). quality: 1..100. Returns 0 on success; *out must be
+   freed with ccodecs_free. */
 int ccodecs_jpegli_encode(const uint8_t *pixels, int width, int height,
-                          int components, int quality,
+                          int components, int quality, int adobe_marker,
                           uint8_t **out, size_t *out_len);
+
+/* Decodes a JPEG into 8-bit interleaved samples exactly as stored (no CMYK
+   inversion). color_transform: -1 = auto, 0/1 = PDF /ColorTransform value.
+   Returns 0 on success; *out must be freed with ccodecs_free. */
+int ccodecs_jpegli_decode(const uint8_t *data, size_t len, int color_transform,
+                          uint8_t **out, int *width, int *height,
+                          int *components, int *adobe_marker);
 
 void ccodecs_free(void *p);
 

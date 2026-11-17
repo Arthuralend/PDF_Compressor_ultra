@@ -1,19 +1,5 @@
 import Foundation
 
-public enum ImageCodec: String, CaseIterable, Identifiable, Sendable, Codable {
-    case jpegli
-    case jpeg2000
-
-    public var id: String { rawValue }
-
-    public var title: String {
-        switch self {
-        case .jpegli: return "JPEGli"
-        case .jpeg2000: return "JPEG 2000"
-        }
-    }
-}
-
 public enum CompressionPreset: String, CaseIterable, Identifiable, Sendable, Codable {
     case strong
     case optimalStrong
@@ -53,23 +39,26 @@ public struct CompressionSettings: Sendable, Codable, Equatable {
     public var dpi: Int
     /// Lossy quality 1...100.
     public var quality: Int
-    public var codec: ImageCodec
     /// Remove editor-private data (PieceInfo), embedded page thumbnails.
     public var removeEditorData: Bool
     /// Allow lossy re-encoding of images. When false only lossless optimization is done.
     public var lossyImages: Bool
+    /// Master mode: 0-based page indices whose images must stay untouched.
+    public var protectedPages: Set<Int> = []
+    /// Master mode: object numbers of individual images that must stay untouched
+    /// (as reported by `PDFCompressor.inspect`).
+    public var protectedImages: Set<Int> = []
 
-    public init(dpi: Int, quality: Int, codec: ImageCodec, removeEditorData: Bool = true, lossyImages: Bool = true) {
+    public init(dpi: Int, quality: Int, removeEditorData: Bool = true, lossyImages: Bool = true) {
         self.dpi = dpi
         self.quality = quality
-        self.codec = codec
         self.removeEditorData = removeEditorData
         self.lossyImages = lossyImages
     }
 
-    public init(preset: CompressionPreset, codec: ImageCodec, manualDPI: Int = 150, manualQuality: Int = 70) {
+    public init(preset: CompressionPreset, manualDPI: Int = 150, manualQuality: Int = 70) {
         let v = preset.values ?? (manualDPI, manualQuality)
-        self.init(dpi: v.dpi, quality: v.quality, codec: codec)
+        self.init(dpi: v.dpi, quality: v.quality)
     }
 }
 
@@ -85,6 +74,10 @@ public struct CompressionReport: Sendable {
     /// The optimized file was not smaller, so the original was copied.
     public var keptOriginal: Bool
     public var codecNote: String?
+    /// One line per image: size, effective resolution, what was done and why.
+    public var imageLog: [String] = []
+    /// Number of images left unchanged, by reason.
+    public var skipped: [String: Int] = [:]
 
     public var savedFraction: Double {
         guard originalSize > 0 else { return 0 }
@@ -95,5 +88,23 @@ public struct CompressionReport: Sendable {
 public enum PDFCompressorInfo {
     /// True when the jpegli encoder was linked in (Scripts/build_jpegli.sh).
     public static var jpegliAvailable: Bool { ImageCodecs.jpegliAvailable }
-    public static var jpeg2000Available: Bool { ImageCodecs.jpeg2000Available }
+}
+
+/// One image drawn on a page (master mode).
+public struct PageImageInfo: Sendable, Identifiable, Hashable {
+    /// Stable within the file: object number of the image.
+    public var objectNumber: Int
+    public var pixelWidth: Int
+    public var pixelHeight: Int
+    /// Bounding box in PDF user space (points, origin bottom-left).
+    public var x: Double, y: Double, width: Double, height: Double
+    /// Effective resolution at this placement.
+    public var ppi: Double
+    public var id: String { "\(objectNumber)@\(x),\(y)" }
+}
+
+public struct PageImagesInfo: Sendable, Identifiable {
+    public var index: Int
+    public var images: [PageImageInfo]
+    public var id: Int { index }
 }

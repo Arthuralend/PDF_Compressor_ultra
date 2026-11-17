@@ -47,7 +47,8 @@ jobs:
           gh release create latest-build dist/*.dmg dist/*.zip \
             --target "$GITHUB_SHA" --prerelease \
             --title "PDF Compressor Ultra — последняя сборка" \
-            --notes "Сборка для Apple Silicon (M1/M2/M3/M4), коммит $GITHUB_SHA. Первый запуск: правый клик → Открыть."
+            --notes "Сборка для Apple Silicon (M1/M2/M3/M4), коммит $GITHUB_SHA. Первый запуск: правый клик → Открыть." \
+            --latest=false
 
       - name: Upload app
         if: always()

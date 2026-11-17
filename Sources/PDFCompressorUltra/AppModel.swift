@@ -31,6 +31,10 @@ final class AppModel: ObservableObject {
         let originalSize: Int
         var status: Status = .pending
         var password: String = ""
+        /// Master mode selections (0-based page indices / image object numbers).
+        var protectedPages: Set<Int> = []
+        var protectedImages: Set<Int> = []
+        var protectedCount: Int { protectedPages.count + protectedImages.count }
     }
 
     enum OutputMode: String, CaseIterable, Identifiable {
@@ -47,9 +51,10 @@ final class AppModel: ObservableObject {
     @Published var files: [FileItem] = []
     @Published var isProcessing = false
     @Published var passwordRequest: FileItem.ID? = nil
+    @Published var masterFile: FileItem.ID? = nil
+    @Published var masterMode: Bool { didSet { save() } }
 
     @Published var preset: CompressionPreset { didSet { save() } }
-    @Published var codec: ImageCodec { didSet { save() } }
     @Published var manualDPI: Double { didSet { save() } }
     @Published var manualQuality: Double { didSet { save() } }
     @Published var removeEditorData: Bool { didSet { save() } }
@@ -61,28 +66,28 @@ final class AppModel: ObservableObject {
 
     private init() {
         preset = CompressionPreset(rawValue: defaults.string(forKey: "preset") ?? "") ?? .optimal
-        codec = ImageCodec(rawValue: defaults.string(forKey: "codec") ?? "") ?? .jpegli
         manualDPI = defaults.object(forKey: "manualDPI") as? Double ?? 150
         manualQuality = defaults.object(forKey: "manualQuality") as? Double ?? 70
         removeEditorData = defaults.object(forKey: "removeEditorData") as? Bool ?? true
         outputMode = OutputMode(rawValue: defaults.string(forKey: "outputMode") ?? "") ?? .nextToOriginal
         outputFolder = defaults.url(forKey: "outputFolder")
         suffix = defaults.string(forKey: "suffix") ?? "_compressed"
+        masterMode = defaults.object(forKey: "masterMode") as? Bool ?? false
     }
 
     private func save() {
         defaults.set(preset.rawValue, forKey: "preset")
-        defaults.set(codec.rawValue, forKey: "codec")
         defaults.set(manualDPI, forKey: "manualDPI")
         defaults.set(manualQuality, forKey: "manualQuality")
         defaults.set(removeEditorData, forKey: "removeEditorData")
         defaults.set(outputMode.rawValue, forKey: "outputMode")
         defaults.set(outputFolder, forKey: "outputFolder")
         defaults.set(suffix, forKey: "suffix")
+        defaults.set(masterMode, forKey: "masterMode")
     }
 
     var settings: CompressionSettings {
-        var s = CompressionSettings(preset: preset, codec: codec,
+        var s = CompressionSettings(preset: preset,
                                     manualDPI: Int(manualDPI.rounded()), manualQuality: Int(manualQuality.rounded()))
         s.removeEditorData = removeEditorData
         return s
@@ -204,6 +209,11 @@ final class AppModel: ObservableObject {
                 guard let idx = files.firstIndex(where: { $0.id == id }) else { continue }
                 let item = files[idx]
                 let out = outputURL(for: item.url)
+                var settings = settings
+                if masterMode {
+                    settings.protectedPages = item.protectedPages
+                    settings.protectedImages = item.protectedImages
+                }
                 files[idx].status = .working(0, "Подготовка…")
                 let result: Result<CompressionReport, Error> = await Task.detached(priority: .userInitiated) { () -> Result<CompressionReport, Error> in
                     do {
@@ -231,6 +241,13 @@ final class AppModel: ObservableObject {
             }
             isProcessing = false
         }
+    }
+
+    func setProtection(_ id: FileItem.ID, pages: Set<Int>, images: Set<Int>) {
+        guard let i = files.firstIndex(where: { $0.id == id }) else { return }
+        files[i].protectedPages = pages
+        files[i].protectedImages = images
+        if case .done = files[i].status { files[i].status = .pending }
     }
 
     fileprivate func updateProgress(_ id: FileItem.ID, _ f: Double, _ msg: String) {

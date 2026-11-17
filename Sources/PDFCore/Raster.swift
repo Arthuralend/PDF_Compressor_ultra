@@ -90,22 +90,50 @@ struct Raster {
     }
 }
 
-/// Image codecs: jpegli (C library) and ImageIO (JPEG 2000 / system JPEG / decoding).
+/// Image codecs: jpegli (C library) for JPEG; ImageIO only as a fallback and
+/// to read JPEG 2000 images that already exist in a PDF.
 enum ImageCodecs {
     static var jpegliAvailable: Bool { ccodecs_jpegli_available() != 0 }
 
-    static func encodeJpegli(_ r: Raster, quality: Int) -> [UInt8]? {
-        guard r.components == 1 || r.components == 3 else { return nil }
+    /// components 1/3/4. For CMYK `adobe` must match the source JPEG.
+    static func encodeJpegli(_ r: Raster, quality: Int, adobe: Bool = false) -> [UInt8]? {
+        guard [1, 3, 4].contains(r.components) else { return nil }
         var out: UnsafeMutablePointer<UInt8>? = nil
         var len = 0
         let rc = r.pixels.withUnsafeBufferPointer { bp in
             ccodecs_jpegli_encode(bp.baseAddress, Int32(r.width), Int32(r.height), Int32(r.components),
-                                  Int32(quality), &out, &len)
+                                  Int32(quality), adobe ? 1 : 0, &out, &len)
         }
         guard rc == 0, let p = out else { return nil }
         defer { ccodecs_free(p) }
         return Array(UnsafeBufferPointer(start: p, count: len))
     }
+
+    /// Any JPEG encoder available: jpegli, else the system encoder (gray/RGB only).
+    static func encodeJPEG(_ r: Raster, quality: Int, adobe: Bool = false) -> [UInt8]? {
+        if jpegliAvailable { return encodeJpegli(r, quality: quality, adobe: adobe) }
+        return r.components == 4 ? nil : encodeSystemJPEG(r, quality: quality)
+    }
+
+    /// Decodes a JPEG to samples exactly as stored (CMYK is not inverted).
+    /// colorTransform: PDF /ColorTransform from DecodeParms, nil = automatic.
+    static func decodeJPEG(_ bytes: [UInt8], colorTransform: Int?) -> (Raster, adobe: Bool)? {
+        if jpegliAvailable {
+            var out: UnsafeMutablePointer<UInt8>? = nil
+            var w: Int32 = 0, h: Int32 = 0, c: Int32 = 0, adobe: Int32 = 0
+            let rc = bytes.withUnsafeBufferPointer { bp in
+                ccodecs_jpegli_decode(bp.baseAddress, bp.count, Int32(colorTransform ?? -1), &out, &w, &h, &c, &adobe)
+            }
+            guard rc == 0, let p = out else { return nil }
+            defer { ccodecs_free(p) }
+            let n = Int(w) * Int(h) * Int(c)
+            return (Raster(width: Int(w), height: Int(h), components: Int(c),
+                           pixels: Array(UnsafeBufferPointer(start: p, count: n))), adobe != 0)
+        }
+        return decodeSystem(bytes).map { ($0, false) }
+    }
+
+    static func decodeJPX(_ bytes: [UInt8]) -> Raster? { decodeSystem(bytes) }
 
     #if canImport(ImageIO)
     static func cgImage(_ r: Raster) -> CGImage? {
@@ -122,27 +150,19 @@ enum ImageCodecs {
                        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
-    static func encode(_ r: Raster, uti: String, quality: Int) -> [UInt8]? {
+    static func encodeSystemJPEG(_ r: Raster, quality: Int) -> [UInt8]? {
         guard let img = cgImage(r) else { return nil }
         let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, uti as CFString, 1, nil) else { return nil }
+        guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, "public.jpeg" as CFString, 1, nil) else { return nil }
         let props: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: Double(quality) / 100.0]
         CGImageDestinationAddImage(dest, img, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return [UInt8](data as Data)
     }
 
-    static func encodeJPEG2000(_ r: Raster, quality: Int) -> [UInt8]? {
-        encode(r, uti: "public.jpeg-2000", quality: quality)
-    }
-
-    static func encodeSystemJPEG(_ r: Raster, quality: Int) -> [UInt8]? {
-        encode(r, uti: "public.jpeg", quality: quality)
-    }
-
-    /// Decodes JPEG / JPEG 2000 data into a gray or RGB raster (no color conversion
-    /// when the source is already gray/RGB). CMYK sources return nil.
-    static func decode(_ bytes: [UInt8]) -> Raster? {
+    /// Decodes via ImageIO into a gray or RGB raster (no color conversion when the
+    /// source is already gray/RGB). CMYK sources return nil.
+    static func decodeSystem(_ bytes: [UInt8]) -> Raster? {
         guard let src = CGImageSourceCreateWithData(Data(bytes) as CFData, nil),
               let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
         let model = img.colorSpace?.model ?? .rgb
@@ -190,12 +210,8 @@ enum ImageCodecs {
         }
         return Raster(width: w, height: h, components: 3, pixels: px)
     }
-
-    static var jpeg2000Available: Bool { true }
     #else
-    static func encodeJPEG2000(_ r: Raster, quality: Int) -> [UInt8]? { nil }
     static func encodeSystemJPEG(_ r: Raster, quality: Int) -> [UInt8]? { nil }
-    static func decode(_ bytes: [UInt8]) -> Raster? { nil }
-    static var jpeg2000Available: Bool { false }
+    static func decodeSystem(_ bytes: [UInt8]) -> Raster? { nil }
     #endif
 }

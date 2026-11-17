@@ -34,6 +34,8 @@ final class ImageUsageAnalyzer {
     private let doc: PDFDocumentModel
     private(set) var usage: [Int: Usage] = [:]
     private(set) var pagesWithImages = 0
+    /// For every page: image object numbers with their placement matrices.
+    private(set) var pagePlacements: [[(Int, Matrix)]] = []
     private var formCache: [Int: [(Int, Matrix)]] = [:]
     private var activeForms: Set<Int> = []
     private var visitedImagesOnPage = false
@@ -57,6 +59,7 @@ final class ImageUsageAnalyzer {
                 for s in streams { placeForm(s, ctm: .identity, parentResources: page.resources, depth: 1, into: &placements) }
             }
             for (num, m) in placements { record(num, m) }
+            pagePlacements.append(placements)
             if !placements.isEmpty { pagesWithImages += 1 }
         }
     }

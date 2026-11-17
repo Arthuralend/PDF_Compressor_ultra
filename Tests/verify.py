@@ -20,14 +20,17 @@ PDFCU, FIX, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 os.makedirs(OUT, exist_ok=True)
 
 CONFIGS = [
-    ("strong-jpegli", ["-p", "strong", "-c", "jpegli"]),
-    ("optimal-jpegli", ["-p", "optimal", "-c", "jpegli"]),
-    ("light-jpegli", ["-p", "light", "-c", "jpegli"]),
-    ("strong-jp2", ["-p", "strong", "-c", "jpeg2000"]),
-    ("medium-jp2", ["-p", "medium", "-c", "jpeg2000"]),
+    ("strong", ["-p", "strong"]),
+    ("optimal-strong", ["-p", "optimal-strong"]),
+    ("optimal", ["-p", "optimal"]),
+    ("medium", ["-p", "medium"]),
+    ("light", ["-p", "light"]),
     ("manual-200-85", ["--dpi", "200", "--quality", "85"]),
     ("lossless", ["--lossless"]),
+    ("keep-page-2", ["-p", "strong", "--keep-pages", "2"]),
 ]
+# Images in these files must get smaller (resolution really reduced) at "strong".
+MUST_SHRINK = {"mixed.pdf": 0.5, "scan.pdf": 0.5, "cmyk.pdf": 0.5, "objstm.pdf": 0.5}
 PASSWORDS = {"enc_password.pdf": "secret"}
 
 failures = []
@@ -69,8 +72,10 @@ for name in sorted(os.listdir(FIX)):
     ref_text = texts(src, pw)
     for cfg, args in CONFIGS:
         dst = os.path.join(OUT, f"{name[:-4]}.{cfg}.pdf")
-        cmd = [PDFCU, src, "-o", dst, "-q"] + args + (["--password", pw] if pw else [])
+        cmd = [PDFCU, src, "-o", dst, "-q", "-v"] + args + (["--password", pw] if pw else [])
         p = subprocess.run(cmd, capture_output=True, text=True)
+        if cfg == "strong":
+            print(f"--- {name} [{cfg}]\n{p.stdout}")
         if p.returncode != 0:
             failures.append(f"{name} [{cfg}]: exit {p.returncode}: {p.stderr.strip()}")
             continue
@@ -96,7 +101,13 @@ for name in sorted(os.listdir(FIX)):
             limit = 99.0 if name == "text_only.pdf" else 40.0
         if worst < limit:
             failures.append(f"{name} [{cfg}]: render PSNR {worst:.1f} dB < {limit}")
+        if cfg == "keep-page-2" and len(ref_pages) >= 2:
+            q2 = psnr(ref_pages[1], out_pages[1])
+            if q2 < 60:
+                failures.append(f"{name} [{cfg}]: protected page 2 changed (PSNR {q2:.1f})")
         a, b = os.path.getsize(src), os.path.getsize(dst)
+        if cfg == "strong" and name in MUST_SHRINK and b > a * MUST_SHRINK[name]:
+            failures.append(f"{name} [{cfg}]: only {100 * (1 - b / a):.0f}% smaller — images not downsampled?")
         rows.append((name, cfg, a, b, worst))
 
 print(f"{'file':20s} {'config':16s} {'orig KB':>9s} {'new KB':>9s} {'saved':>7s} {'PSNR':>6s}")

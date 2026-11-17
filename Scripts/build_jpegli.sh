@@ -48,7 +48,7 @@ rm -rf "$DEST"
 mkdir -p "$DEST/lib" "$DEST/include/lib/jpegli" "$DEST/include/lib/jxl/base"
 cp build/lib/libjpegli-static.a "$DEST/lib/"
 cp build/third_party/highway/libhwy.a "$DEST/lib/"
-cp lib/jpegli/encode.h lib/jpegli/common.h lib/jpegli/types.h "$DEST/include/lib/jpegli/"
+cp lib/jpegli/encode.h lib/jpegli/decode.h lib/jpegli/common.h lib/jpegli/types.h "$DEST/include/lib/jpegli/"
 cp lib/jxl/base/include_jpeglib.h "$DEST/include/lib/jxl/base/"
 cp build/lib/include/jpegli/jpeglib.h build/lib/include/jpegli/jconfig.h \
    build/lib/include/jpegli/jmorecfg.h "$DEST/include/"

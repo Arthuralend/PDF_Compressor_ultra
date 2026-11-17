@@ -21,6 +21,14 @@ struct ContentView: View {
         )) { req in
             PasswordSheet(model: model, fileID: req.id)
         }
+        .sheet(item: Binding(
+            get: { model.masterFile.map { PasswordRequest(id: $0) } },
+            set: { model.masterFile = $0?.id }
+        )) { req in
+            if let item = model.files.first(where: { $0.id == req.id }) {
+                MasterView(model: model, item: item)
+            }
+        }
     }
 }
 
@@ -67,17 +75,23 @@ struct SettingsPanel: View {
                     }
                 }
 
-                section("Формат изображений") {
-                    Picker("", selection: $model.codec) {
-                        ForEach(ImageCodec.allCases) { c in Text(c.title).tag(c) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .disabled(model.isProcessing)
+                section("Кодек изображений") {
                     Text(codecHint)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                section("Мастер-режим") {
+                    Toggle("Выбирать страницы и изображения, которые не сжимать", isOn: $model.masterMode)
+                        .toggleStyle(.switch)
+                        .disabled(model.isProcessing)
+                    if model.masterMode {
+                        Text("У каждого файла появится кнопка «Страницы…»: отметьте страницы или щёлкните по изображениям, которые нужно оставить как есть.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
 
                 section("Дополнительно") {
@@ -124,14 +138,9 @@ struct SettingsPanel: View {
     }
 
     private var codecHint: String {
-        switch model.codec {
-        case .jpegli:
-            return model.jpegliBuiltIn
-                ? "JPEGli — современный кодер JPEG от Google: на 25–35% меньше при том же качестве, совместим со всеми программами."
-                : "JPEGli не встроен в эту сборку (запустите Scripts/build_jpegli.sh) — будет использован системный JPEG."
-        case .jpeg2000:
-            return "JPEG 2000 — меньше артефактов на сильном сжатии. Требует PDF 1.5+; поддерживается Acrobat, Preview, Chrome, Firefox."
-        }
+        model.jpegliBuiltIn
+            ? "JPEGli — современный кодер JPEG от Google: на 25–35% меньше при том же качестве, открывается в любой программе."
+            : "JPEGli не встроен в эту сборку — используется системный JPEG."
     }
 
     @ViewBuilder
@@ -373,17 +382,36 @@ struct FileRow: View {
         } else {
             parts.append("без изображений — сжатие без потерь")
         }
+        if r.imagesDownsampled > 0 { parts.append("уменьшено разрешение: \(r.imagesDownsampled)") }
         if let n = r.codecNote { parts.append(n) }
         return parts.joined(separator: " · ")
     }
 
     @ViewBuilder private var trailing: some View {
+        HStack(spacing: 8) {
+            if model.masterMode {
+                Button {
+                    model.masterFile = item.id
+                } label: {
+                    Label(item.protectedCount > 0 ? "Страницы (\(item.protectedCount))" : "Страницы…",
+                          systemImage: "rectangle.and.hand.point.up.left")
+                }
+                .disabled(model.isProcessing)
+            }
+            statusTrailing
+        }
+    }
+
+    @ViewBuilder private var statusTrailing: some View {
         switch item.status {
         case .done(let r, let out):
             HStack(spacing: 8) {
                 Text(r.savedFraction > 0 ? "−\(Int((r.savedFraction * 100).rounded()))%" : "0%")
                     .font(.system(.title3, design: .rounded).weight(.bold))
                     .foregroundStyle(r.savedFraction > 0.01 ? Color.green : Color.secondary)
+                if !r.imageLog.isEmpty {
+                    ImageReportButton(report: r)
+                }
                 Button { model.reveal(out) } label: { Image(systemName: "magnifyingglass") }
                     .buttonStyle(.borderless)
                     .help("Показать в Finder")
@@ -433,5 +461,44 @@ struct PasswordSheet: View {
     private func submit() {
         guard !password.isEmpty else { return }
         model.submitPassword(password, for: fileID)
+    }
+}
+
+struct ImageReportButton: View {
+    let report: CompressionReport
+    @State private var shown = false
+
+    var body: some View {
+        Button { shown.toggle() } label: { Image(systemName: "info.circle") }
+            .buttonStyle(.borderless)
+            .help("Отчёт по изображениям")
+            .popover(isPresented: $shown, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Изображения: \(report.imagesFound), пересжато \(report.imagesRecompressed), уменьшено \(report.imagesDownsampled)")
+                        .font(.headline)
+                    if !report.skipped.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Оставлены без изменений:").font(.subheadline.weight(.semibold))
+                            ForEach(report.skipped.sorted(by: { $0.value > $1.value }), id: \.key) { k, v in
+                                Text("\(v) × \(k)").font(.caption)
+                            }
+                        }
+                    }
+                    Divider()
+                    ScrollView {
+                        Text(report.imageLog.joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(height: 260)
+                    Button("Скопировать отчёт") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(report.imageLog.joined(separator: "\n"), forType: .string)
+                    }
+                }
+                .padding(14)
+                .frame(width: 520)
+            }
     }
 }

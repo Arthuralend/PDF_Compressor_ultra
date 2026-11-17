@@ -59,6 +59,12 @@ public enum PDFCompressor {
         analyzer.analyze(pages: pages)
         report.pagesWithImages = analyzer.pagesWithImages
 
+        // Master mode: images chosen by the user stay exactly as they are.
+        var protectedImages = settings.protectedImages
+        for p in settings.protectedPages where p >= 0 && p < analyzer.pagePlacements.count {
+            for (num, _) in analyzer.pagePlacements[p] { protectedImages.insert(num) }
+        }
+
         // 3. Build jobs (serial: resolving touches the document cache).
         var maskNums = Set<Int>()
         var matteImages = Set<Int>()
@@ -78,6 +84,14 @@ public enum PDFCompressor {
             let isImage = doc.resolve(s.dict["Subtype"] ?? .null).nameValue == "Image"
             // XMP metadata stays uncompressed (PDF/A requirement, readable by indexers).
             if doc.resolve(s.dict["Type"] ?? .null).nameValue == "Metadata" { continue }
+            if isImage && protectedImages.contains(num) {
+                report.imagesFound += 1
+                report.skipped["выбрано «не сжимать»", default: 0] += 1
+                let w = doc.resolve(s.dict["Width"] ?? .null).intValue ?? 0
+                let h = doc.resolve(s.dict["Height"] ?? .null).intValue ?? 0
+                report.imageLog.append("#\(num) \(w)×\(h): без изменений — выбрано «не сжимать»")
+                continue
+            }
             if isImage {
                 report.imagesFound += 1
                 jobs.append(.image(makeImageJob(num: num, stream: s, filters: filters, parms: parms, doc: doc,
@@ -89,11 +103,9 @@ public enum PDFCompressor {
         }
 
         // 4. Process streams in parallel.
-        var codecNote: String? = nil
-        if settings.codec == .jpegli && !ImageCodecs.jpegliAvailable {
-            codecNote = "JPEGli не встроен в сборку — использован системный JPEG"
+        if !ImageCodecs.jpegliAvailable {
+            report.codecNote = "JPEGli не встроен в сборку — использован системный JPEG"
         }
-        report.codecNote = codecNote
         let results = UnsafeMutableBufferPointer<JobResult?>.allocate(capacity: jobs.count)
         results.initialize(repeating: nil)
         defer { results.deallocate() }
@@ -113,7 +125,10 @@ public enum PDFCompressor {
         }
         for i in 0..<jobs.count {
             guard let r = results[i] else { continue }
-            table[r.num] = .stream(r.stream)
+            if let line = r.log { report.imageLog.append(line) }
+            if let reason = r.skipReason { report.skipped[reason, default: 0] += 1 }
+            guard let ns = r.stream else { continue }
+            table[r.num] = .stream(ns)
             if r.isImage {
                 report.imagesRecompressed += 1
                 if r.downsampled { report.imagesDownsampled += 1 }
@@ -171,6 +186,36 @@ public enum PDFCompressor {
         report.compressedSize = out.count
         progress?(1, "Готово")
         return (out, report)
+    }
+
+    // MARK: - Inspection (master mode)
+
+    /// Lists the images drawn on every page with their position and resolution.
+    public static func inspect(url: URL, password: String = "") throws -> [PageImagesInfo] {
+        let doc = try PDFDocumentModel(url: url, password: password)
+        let pages = doc.pages()
+        let analyzer = ImageUsageAnalyzer(doc: doc)
+        analyzer.analyze(pages: pages)
+        var result: [PageImagesInfo] = []
+        for (i, placements) in analyzer.pagePlacements.enumerated() {
+            var images: [PageImageInfo] = []
+            for (num, m) in placements {
+                guard let s = doc.indirect(num)?.stream else { continue }
+                let pw = doc.resolve(s.dict["Width"] ?? .null).intValue ?? 0
+                let ph = doc.resolve(s.dict["Height"] ?? .null).intValue ?? 0
+                let xs = [m.e, m.a + m.e, m.c + m.e, m.a + m.c + m.e]
+                let ys = [m.f, m.b + m.f, m.d + m.f, m.b + m.d + m.f]
+                let w = (m.a * m.a + m.b * m.b).squareRoot()
+                let h = (m.c * m.c + m.d * m.d).squareRoot()
+                guard w > 0.5, h > 0.5 else { continue }
+                let ppi = min(Double(pw) / (w / 72), Double(ph) / (h / 72))
+                images.append(PageImageInfo(objectNumber: num, pixelWidth: pw, pixelHeight: ph,
+                                            x: xs.min()!, y: ys.min()!,
+                                            width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!, ppi: ppi))
+            }
+            result.append(PageImagesInfo(index: i, images: images))
+        }
+        return result
     }
 
     // MARK: - Object graph helpers
@@ -298,6 +343,10 @@ public enum PDFCompressor {
             case .indexed(_, let o, _, _): return o
             }
         }
+        var isIndexed: Bool {
+            if case .indexed = self { return true }
+            return false
+        }
     }
 
     struct ImageJob {
@@ -311,8 +360,11 @@ public enum PDFCompressor {
         var color: ColorModel?
         var imageMask: Bool
         var defaultDecode: Bool
-        var lossyAllowed: Bool
-        var resampleAllowed: Bool
+        var isMask: Bool
+        var hasMatte: Bool
+        var colorKeyMask: Bool
+        var placed: Bool
+        var ppi: Double?
         var targetWidth: Int
         var targetHeight: Int
         var smaskInData: Bool
@@ -325,9 +377,11 @@ public enum PDFCompressor {
 
     struct JobResult {
         var num: Int
-        var stream: PDFStream
+        var stream: PDFStream?
         var isImage: Bool
         var downsampled: Bool
+        var log: String?
+        var skipReason: String?
     }
 
     private static func deviceComps(_ name: String) -> Int? {
@@ -339,6 +393,9 @@ public enum PDFCompressor {
         }
     }
 
+    /// Number of color components and the object to write back. Spot colors
+    /// (Separation / DeviceN), Lab and ICC spaces are kept as they are: we only
+    /// change the resolution and compression of the samples, never their meaning.
     private static func colorModel(_ original: PDFObject, doc: PDFDocumentModel, allowIndexed: Bool = true) -> ColorModel? {
         let cs = doc.resolve(original)
         switch cs {
@@ -352,8 +409,11 @@ public enum PDFCompressor {
                 guard a.count >= 2, let s = doc.stream(a[1]), let n = doc.resolve(s.dict["N"] ?? .null).intValue,
                       [1, 3, 4].contains(n) else { return nil }
                 return .device(comps: n, object: original)
-            case "CalRGB": return .device(comps: 3, object: original)
-            case "CalGray": return .device(comps: 1, object: original)
+            case "CalRGB", "Lab": return .device(comps: 3, object: original)
+            case "CalGray", "Separation": return .device(comps: 1, object: original)
+            case "DeviceN":
+                guard a.count >= 2, let names = doc.resolve(a[1]).arrayValue, !names.isEmpty, names.count <= 4 else { return nil }
+                return .device(comps: names.count, object: original)
             case "DeviceGray", "DeviceRGB", "DeviceCMYK":
                 return .device(comps: deviceComps(first)!, object: original)
             case "Indexed", "I":
@@ -393,50 +453,58 @@ public enum PDFCompressor {
         var defaultDecode = true
         if let dec = doc.resolve(d["Decode"] ?? .null).arrayValue {
             let vals = dec.compactMap { doc.resolve($0).doubleValue }
-            let isIndexed: Bool = { if case .indexed? = color { return true }; return false }()
+            let isIndexed = color?.isIndexed ?? false
             for (i, v) in vals.enumerated() {
                 let expected: Double = i % 2 == 0 ? 0 : (isIndexed ? Double((1 << bpc) - 1) : 1)
                 if abs(v - expected) > 1e-6 { defaultDecode = false }
             }
         }
-        // Color-key masking (/Mask [ranges]) breaks with lossy codecs.
         let colorKeyMask = doc.resolve(d["Mask"] ?? .null).arrayValue != nil
         let smaskInData = (doc.resolve(d["SMaskInData"] ?? .null).intValue ?? 0) != 0
 
         var tw = width, th = height
-        if let u = usage, width > 0, height > 0, settings.dpi > 0 {
+        var ppi: Double? = nil
+        let placed = (usage?.maxWidthPt ?? 0) > 0.5 && (usage?.maxHeightPt ?? 0) > 0.5
+        if let u = usage, placed, width > 0, height > 0, settings.dpi > 0 {
             let target = Double(settings.dpi)
-            if u.maxWidthPt > 0.5 {
-                let ppi = Double(width) / (u.maxWidthPt / 72)
-                if ppi > target * 1.1 { tw = max(1, Int((Double(width) * target / ppi).rounded(.up))) }
-            }
-            if u.maxHeightPt > 0.5 {
-                let ppi = Double(height) / (u.maxHeightPt / 72)
-                if ppi > target * 1.1 { th = max(1, Int((Double(height) * target / ppi).rounded(.up))) }
-            }
+            let ppiX = Double(width) / (u.maxWidthPt / 72)
+            let ppiY = Double(height) / (u.maxHeightPt / 72)
+            ppi = min(ppiX, ppiY)
+            if ppiX > target * 1.05 { tw = max(1, Int((Double(width) * target / ppiX).rounded(.up))) }
+            if ppiY > target * 1.05 { th = max(1, Int((Double(height) * target / ppiY).rounded(.up))) }
         }
-        let lossy = settings.lossyImages && !isMask && !imageMask && !colorKeyMask && defaultDecode && !smaskInData
-        let resample = !isMask && !imageMask && !hasMatte && !colorKeyMask && defaultDecode
         return ImageJob(num: num, stream: s, filters: filters, parms: parms, width: width, height: height, bpc: bpc,
-                        color: color, imageMask: imageMask, defaultDecode: defaultDecode, lossyAllowed: lossy,
-                        resampleAllowed: resample, targetWidth: tw, targetHeight: th, smaskInData: smaskInData)
+                        color: color, imageMask: imageMask, defaultDecode: defaultDecode, isMask: isMask,
+                        hasMatte: hasMatte, colorKeyMask: colorKeyMask, placed: placed, ppi: ppi,
+                        targetWidth: tw, targetHeight: th, smaskInData: smaskInData)
     }
 
-    static func process(_ job: Job, settings: CompressionSettings) -> JobResult? {
+    static func process(_ job: Job, settings: CompressionSettings) -> JobResult {
         switch job {
         case .generic(let num, let s, let f, let p):
-            guard let ns = optimizeLossless(s, filters: f, parms: p, imageInfo: nil) else { return nil }
-            return JobResult(num: num, stream: ns, isImage: false, downsampled: false)
+            let ns = optimizeLossless(s, filters: f, parms: p, imageInfo: nil)
+            return JobResult(num: num, stream: ns, isImage: false, downsampled: false, log: nil, skipReason: nil)
         case .image(let j):
-            if let r = recompressImage(j, settings: settings) { return r }
-            // Fall back to lossless recompression of the image data.
-            var info: (Int, Int, Int)? = nil
-            if let c = j.color, !j.imageMask {
-                let comps: Int = { if case .indexed = c { return 1 }; return c.outputComponents }()
-                info = (comps, j.bpc, j.width)
+            let outcome = recompressImage(j, settings: settings)
+            let ppiText = j.ppi.map { "\(Int($0.rounded())) ppi" } ?? "не найдено на страницах"
+            let codec = j.filters.last ?? "без сжатия"
+            let head = "#\(j.num) \(j.width)×\(j.height) \(codec), \(ppiText)"
+            switch outcome {
+            case .success(let r):
+                var r = r
+                let what = r.downsampled ? "уменьшено до \(r.stream?.dict.int("Width") ?? 0)×\(r.stream?.dict.int("Height") ?? 0)" : "пересжато"
+                r.log = "\(head): \(what), \(j.stream.data.count / 1024) → \((r.stream?.data.count ?? 0) / 1024) КБ"
+                return r
+            case .failure(let reason):
+                // Fall back to lossless recompression of the image data.
+                var info: (Int, Int, Int)? = nil
+                if let c = j.color, !j.imageMask {
+                    info = (c.isIndexed ? 1 : c.outputComponents, j.bpc, j.width)
+                }
+                let ns = optimizeLossless(j.stream, filters: j.filters, parms: j.parms, imageInfo: info)
+                return JobResult(num: j.num, stream: ns, isImage: false, downsampled: false,
+                                 log: "\(head): без изменений — \(reason.text)", skipReason: reason.text)
             }
-            guard let ns = optimizeLossless(j.stream, filters: j.filters, parms: j.parms, imageInfo: info) else { return nil }
-            return JobResult(num: j.num, stream: ns, isImage: false, downsampled: false)
         }
     }
 
@@ -489,38 +557,72 @@ public enum PDFCompressor {
 
     // MARK: - Image recompression
 
-    static func recompressImage(_ j: ImageJob, settings: CompressionSettings) -> JobResult? {
-        guard j.width > 0, j.height > 0, !j.imageMask else { return nil }
-        let needsResample = j.resampleAllowed && (j.targetWidth < j.width || j.targetHeight < j.height)
-        guard j.lossyAllowed || needsResample else { return nil }
-        guard let dec = try? Filters.decode(j.stream.data, filters: j.filters, parms: j.parms, resolve: { $0 }) else { return nil }
+    struct SkipReason: Error {
+        var text: String
+        init(_ t: String) { text = t }
+    }
+
+    static func recompressImage(_ j: ImageJob, settings: CompressionSettings) -> Result<JobResult, SkipReason> {
+        guard j.width > 0, j.height > 0 else { return .failure(SkipReason("неверный размер")) }
+        if j.imageMask || j.isMask { return .failure(SkipReason("маска (сохраняется без потерь)")) }
+        if j.colorKeyMask { return .failure(SkipReason("маска по цвету (сохраняется без потерь)")) }
+        if j.smaskInData { return .failure(SkipReason("JPEG 2000 со встроенной прозрачностью")) }
+        let needsResample = !j.hasMatte && (j.targetWidth < j.width || j.targetHeight < j.height)
+        if !settings.lossyImages && !needsResample { return .failure(SkipReason("режим без потерь")) }
+        let dec: DecodedStream
+        do {
+            dec = try Filters.decode(j.stream.data, filters: j.filters, parms: j.parms, resolve: { $0 })
+        } catch {
+            return .failure(SkipReason("повреждённые данные"))
+        }
 
         var raster: Raster
         var colorObject: PDFObject
+        var adobe = false
+        var keepDecode = false
         var paletteSize = Int.max
         let rest = dec.remainingFilters
         if rest.isEmpty {
-            guard let c = j.color else { return nil }
-            if j.bpc == 1, case .device = c { return nil } // bilevel scans: keep lossless
-            guard let r = unpack(dec.data, width: j.width, height: j.height, bpc: j.bpc, color: c) else { return nil }
+            guard let c = j.color else { return .failure(SkipReason("неподдерживаемое цветовое пространство")) }
+            if j.bpc == 1, !c.isIndexed { return .failure(SkipReason("1-битное изображение (скан текста)")) }
+            if c.isIndexed && !j.defaultDecode { return .failure(SkipReason("нестандартный Decode")) }
+            guard let r = unpack(dec.data, width: j.width, height: j.height, bpc: j.bpc, color: c) else {
+                return .failure(SkipReason("не удалось распаковать"))
+            }
             raster = r
             colorObject = c.outputObject
+            keepDecode = !c.isIndexed
             if case .indexed(_, _, let hival, _) = c { paletteSize = hival + 1 }
-        } else if rest == ["DCTDecode"] || rest == ["JPXDecode"] {
-            guard j.defaultDecode else { return nil }
-            if let c = j.color, c.outputComponents == 4 { return nil }
-            if case .indexed? = j.color { return nil }
-            guard let r = ImageCodecs.decode(dec.data) else { return nil }
+        } else if rest == ["DCTDecode"] {
+            var ct: Int? = nil
+            if let p = dec.remainingParms.first?.dictValue { ct = p.int("ColorTransform") }
+            guard let decoded = ImageCodecs.decodeJPEG(dec.data, colorTransform: ct) else {
+                return .failure(SkipReason("не удалось декодировать JPEG"))
+            }
+            let r = decoded.0
             raster = r
-            if let c = j.color, c.outputComponents == r.components {
+            adobe = decoded.adobe
+            keepDecode = true
+            if let c = j.color {
+                guard !c.isIndexed, c.outputComponents == r.components else {
+                    return .failure(SkipReason("число каналов JPEG не совпадает с цветовым пространством"))
+                }
                 colorObject = c.outputObject
-            } else if j.color == nil || rest == ["DCTDecode"] {
-                colorObject = .name(r.components == 1 ? "DeviceGray" : "DeviceRGB")
+            } else if j.stream.dict["ColorSpace"] == nil {
+                colorObject = .name(r.components == 1 ? "DeviceGray" : (r.components == 3 ? "DeviceRGB" : "DeviceCMYK"))
             } else {
-                return nil
+                return .failure(SkipReason("неподдерживаемое цветовое пространство"))
+            }
+        } else if rest == ["JPXDecode"] {
+            guard let r = ImageCodecs.decodeJPX(dec.data) else { return .failure(SkipReason("не удалось декодировать JPEG 2000")) }
+            raster = r
+            if let c = j.color, !c.isIndexed, c.outputComponents == r.components {
+                colorObject = c.outputObject
+            } else {
+                colorObject = .name(r.components == 1 ? "DeviceGray" : "DeviceRGB")
             }
         } else {
-            return nil
+            return .failure(SkipReason("формат \(rest.joined(separator: "+")) (сохраняется как есть)"))
         }
 
         var downsampled = false
@@ -529,53 +631,52 @@ public enum PDFCompressor {
             downsampled = raster.width < j.width || raster.height < j.height
         }
 
-        let lossyOK = j.lossyAllowed && (raster.components == 1 || raster.components == 3)
-            && paletteSize > 64 && raster.width * raster.height >= 256
+        // Raw CMYK has no reliable "inverted or not" convention in JPEG readers,
+        // so only JPEG-sourced CMYK (whose convention we preserve) is re-encoded lossy.
+        let cmykOK = raster.components != 4 || rest == ["DCTDecode"]
+        let lossyOK = settings.lossyImages && cmykOK && paletteSize > 64 && raster.width * raster.height >= 256
         var encoded: [UInt8]? = nil
         var filter = "FlateDecode"
         var parms: PDFObject = .null
         if lossyOK {
-            switch settings.codec {
-            case .jpeg2000:
-                if let e = ImageCodecs.encodeJPEG2000(raster, quality: settings.quality) {
-                    encoded = e
-                    filter = "JPXDecode"
-                }
-            case .jpegli:
-                break
-            }
-            if encoded == nil {
-                if let e = ImageCodecs.encodeJpegli(raster, quality: settings.quality)
-                    ?? ImageCodecs.encodeSystemJPEG(raster, quality: settings.quality) {
-                    encoded = e
-                    filter = "DCTDecode"
-                }
-            }
+            encoded = ImageCodecs.encodeJPEG(raster, quality: settings.quality, adobe: adobe)
+            if encoded != nil { filter = "DCTDecode" }
         }
         if encoded == nil {
-            // Lossless (CMYK, small palettes, masks…) — only worth it when downsampled.
-            guard downsampled else { return nil }
+            guard downsampled else {
+                if !settings.lossyImages { return .failure(SkipReason("режим без потерь")) }
+                if paletteSize <= 64 { return .failure(SkipReason("мало цветов (графика, сохраняется без потерь)")) }
+                if !cmykOK { return .failure(SkipReason("CMYK без JPEG (сохраняется без потерь)")) }
+                return .failure(SkipReason("слишком маленькое"))
+            }
             let rowLen = raster.width * raster.components
             let predicted = Filters.pngPredict(raster.pixels, rowLen: rowLen, bpp: raster.components)
-            guard let z = Zlib.deflate(predicted) else { return nil }
+            guard let z = Zlib.deflate(predicted) else { return .failure(SkipReason("ошибка сжатия")) }
             encoded = z
             filter = "FlateDecode"
             parms = .dict(PDFDict([("Predictor", .int(15)), ("Colors", .int(raster.components)),
                                    ("BitsPerComponent", .int(8)), ("Columns", .int(raster.width))]))
         }
-        guard let data = encoded else { return nil }
-        // Keep the original unless we gain at least 5 %.
-        guard Double(data.count) < Double(j.stream.data.count) * 0.95 else { return nil }
+        guard let data = encoded else { return .failure(SkipReason("ошибка сжатия")) }
+        // Without downsampling keep the original unless we gain at least 5 %.
+        let limit = downsampled ? 1.0 : 0.95
+        guard Double(data.count) < Double(j.stream.data.count) * limit else {
+            if downsampled { return .failure(SkipReason("после уменьшения файл не стал меньше")) }
+            if !j.placed { return .failure(SkipReason("не нарисовано на страницах напрямую, уже сжато")) }
+            return .failure(SkipReason("разрешение уже ≤ \(settings.dpi) dpi и сжато не хуже"))
+        }
 
         var d = j.stream.dict
-        d.remove("Filter", "DecodeParms", "DP", "Length", "DL", "Decode", "SMaskInData")
+        d.remove("Filter", "DecodeParms", "DP", "Length", "DL", "SMaskInData")
+        if !keepDecode { d["Decode"] = nil }
         d["Width"] = .int(raster.width)
         d["Height"] = .int(raster.height)
         d["BitsPerComponent"] = .int(8)
         d["ColorSpace"] = colorObject
         d["Filter"] = .name(filter)
         if !parms.isNull { d["DecodeParms"] = parms }
-        return JobResult(num: j.num, stream: PDFStream(dict: d, data: data), isImage: true, downsampled: downsampled)
+        return .success(JobResult(num: j.num, stream: PDFStream(dict: d, data: data), isImage: true,
+                                  downsampled: downsampled, log: nil, skipReason: nil))
     }
 
     /// Unpacks raw PDF image samples into an 8-bit raster (palettes expanded).
