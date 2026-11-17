@@ -565,7 +565,8 @@ public enum PDFCompressor {
             switch outcome {
             case .success(let r):
                 var r = r
-                let conv = r.conversion == .bilevel ? "ч/б 1 бит (CCITT G4), " : (r.conversion == .grayscale ? "в оттенки серого, " : "")
+                let bw = r.stream?.dict.name("Filter") == "JBIG2Decode" ? "JBIG2" : "CCITT G4"
+                let conv = r.conversion == .bilevel ? "ч/б 1 бит (\(bw)), " : (r.conversion == .grayscale ? "в оттенки серого, " : "")
                 let what = conv + (r.downsampled ? "уменьшено до \(r.stream?.dict.int("Width") ?? 0)×\(r.stream?.dict.int("Height") ?? 0)" : "пересжато")
                 r.log = "\(head): \(what), \(j.stream.data.count / 1024) → \((r.stream?.data.count ?? 0) / 1024) КБ"
                 return r
@@ -707,8 +708,15 @@ public enum PDFCompressor {
             if j.colorMode == .bilevel && (j.bilevelForced || gray.looksLikeText()) {
                 let g = gray.resized(width: j.bilevelWidth, height: j.bilevelHeight)
                 let bits = g.binarized()
-                guard let g4 = CCITT.encodeG4(bits, width: g.width, height: g.height) else {
-                    return .failure(SkipReason("ошибка кодирования CCITT G4"))
+                // Lossless JBIG2 is usually ~2x smaller than G4; keep whichever is smaller.
+                let jb = JBIG2.encodeGeneric(bits, width: g.width, height: g.height)
+                let g4 = CCITT.encodeG4(bits, width: g.width, height: g.height)
+                let useJBIG2: Bool
+                switch (jb, g4) {
+                case let (j?, c?): useJBIG2 = j.count < c.count
+                case (.some, nil): useJBIG2 = true
+                case (nil, .some): useJBIG2 = false
+                case (nil, nil): return .failure(SkipReason("ошибка кодирования 1 бит"))
                 }
                 var d = j.stream.dict
                 d.remove("Filter", "DecodeParms", "DP", "Length", "DL", "SMaskInData", "Decode", "Intent")
@@ -716,9 +724,16 @@ public enum PDFCompressor {
                 d["Height"] = .int(g.height)
                 d["BitsPerComponent"] = .int(1)
                 d["ColorSpace"] = .name("DeviceGray")
-                d["Filter"] = .name("CCITTFaxDecode")
-                d["DecodeParms"] = .dict(PDFDict([("K", .int(-1)), ("Columns", .int(g.width)), ("Rows", .int(g.height))]))
-                return .success(JobResult(num: j.num, stream: PDFStream(dict: d, data: g4), isImage: true,
+                let data: [UInt8]
+                if useJBIG2 {
+                    d["Filter"] = .name("JBIG2Decode")
+                    data = jb!
+                } else {
+                    d["Filter"] = .name("CCITTFaxDecode")
+                    d["DecodeParms"] = .dict(PDFDict([("K", .int(-1)), ("Columns", .int(g.width)), ("Rows", .int(g.height))]))
+                    data = g4!
+                }
+                return .success(JobResult(num: j.num, stream: PDFStream(dict: d, data: data), isImage: true,
                                           downsampled: g.width < j.width || g.height < j.height,
                                           log: nil, skipReason: nil, conversion: .bilevel))
             }

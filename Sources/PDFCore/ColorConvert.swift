@@ -131,6 +131,20 @@ extension Raster {
     }
 }
 
+enum JBIG2 {
+    /// Lossless JBIG2 generic region (embedded stream for /JBIG2Decode).
+    static func encodeGeneric(_ bits: [UInt8], width: Int, height: Int) -> [UInt8]? {
+        var out: UnsafeMutablePointer<UInt8>? = nil
+        var len = 0
+        let rc = bits.withUnsafeBufferPointer { bp in
+            ccodecs_jbig2_generic_encode(bp.baseAddress, Int32(width), Int32(height), &out, &len)
+        }
+        guard rc == 0, let p = out else { return nil }
+        defer { ccodecs_free(p) }
+        return Array(UnsafeBufferPointer(start: p, count: len))
+    }
+}
+
 enum CCITT {
     static func encodeG4(_ bits: [UInt8], width: Int, height: Int) -> [UInt8]? {
         var out: UnsafeMutablePointer<UInt8>? = nil

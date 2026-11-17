@@ -30,7 +30,7 @@ jobs:
         run: ./Scripts/build_app.sh
 
       - name: Test dependencies
-        run: python3 -m pip install --break-system-packages -q reportlab pillow numpy pikepdf pypdfium2 pypdf
+        run: python3 -m pip install --break-system-packages -q reportlab pillow numpy pikepdf pypdfium2 pypdf pymupdf
 
       - name: Generate fixtures
         run: python3 Tests/make_fixtures.py out/fixtures
@@ -79,7 +79,7 @@ jobs:
       - name: Build CLI
         run: swift build -c release --product pdfcu
       - name: Test dependencies
-        run: python3 -m pip install --break-system-packages -q reportlab pillow numpy pikepdf pypdfium2 pypdf
+        run: python3 -m pip install --break-system-packages -q reportlab pillow numpy pikepdf pypdfium2 pypdf pymupdf
       - name: Generate fixtures
         run: python3 Tests/make_fixtures.py out/fixtures
       - name: Verify compression

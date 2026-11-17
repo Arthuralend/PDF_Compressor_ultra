@@ -50,6 +50,12 @@ int ccodecs_jpegli_decode(const uint8_t *data, size_t len, int color_transform,
 int ccodecs_ccitt_g4_encode(const uint8_t *pixels, int width, int height,
                             uint8_t **out, size_t *out_len);
 
+/* Encodes a bilevel image (1 byte per pixel, 1 = black) as lossless JBIG2
+   (generic region, template 0, TPGDON) in the embedded format of PDF
+   /JBIG2Decode (no globals needed). */
+int ccodecs_jbig2_generic_encode(const uint8_t *pixels, int width, int height,
+                                 uint8_t **out, size_t *out_len);
+
 void ccodecs_free(void *p);
 
 #ifdef __cplusplus
