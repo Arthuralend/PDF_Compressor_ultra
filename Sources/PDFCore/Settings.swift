@@ -1,5 +1,22 @@
 import Foundation
 
+public enum ColorMode: String, CaseIterable, Identifiable, Sendable, Codable {
+    case color
+    case grayscale
+    /// 1-bit black & white (CCITT G4) for text scans; photos become grayscale.
+    case bilevel
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .color: return "Цвет"
+        case .grayscale: return "Оттенки серого"
+        case .bilevel: return "Ч/б (1 бит)"
+        }
+    }
+}
+
 public enum CompressionPreset: String, CaseIterable, Identifiable, Sendable, Codable {
     case strong
     case optimalStrong
@@ -48,6 +65,13 @@ public struct CompressionSettings: Sendable, Codable, Equatable {
     /// Master mode: object numbers of individual images that must stay untouched
     /// (as reported by `PDFCompressor.inspect`).
     public var protectedImages: Set<Int> = []
+    /// Color conversion for the whole document.
+    public var colorMode: ColorMode = .color
+    /// Master mode: per-page color mode (0-based page index). For `.bilevel`
+    /// set here, images are made 1-bit even when they look like photos.
+    public var pageColorModes: [Int: ColorMode] = [:]
+    /// Resolution used for 1-bit images.
+    public var bilevelDPI: Int = 300
 
     public init(dpi: Int, quality: Int, removeEditorData: Bool = true, lossyImages: Bool = true) {
         self.dpi = dpi
@@ -70,6 +94,8 @@ public struct CompressionReport: Sendable {
     public var imagesFound: Int
     public var imagesRecompressed: Int
     public var imagesDownsampled: Int
+    public var imagesToGray: Int = 0
+    public var imagesToBilevel: Int = 0
     public var streamsOptimized: Int
     /// The optimized file was not smaller, so the original was copied.
     public var keptOriginal: Bool

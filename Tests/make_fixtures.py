@@ -148,7 +148,23 @@ for idx, (w, h, place) in enumerate([(1948, 1468, (85, 444, 468, 352)), (1429, 2
     pat.pages.append(pikepdf.Page(page))
 pat.save(f"{OUT}/pattern_images.pdf")
 
-# 8. Damaged xref: break startxref offset
+# 8. Scanned contract: gray 300 dpi JPEG of text on slightly gray paper
+from PIL import ImageDraw, ImageFilter
+scan_img = Image.new("L", (2480, 3508), 236)
+dr = ImageDraw.Draw(scan_img)
+for i in range(70):
+    dr.text((180, 200 + i * 44), f"Contract line {i + 1}: the parties agree to the following terms 0123456789",
+            fill=40, font_size=34)
+dr.rectangle((1500, 3000, 2300, 3300), outline=30, width=6)
+scan_img = scan_img.filter(ImageFilter.GaussianBlur(0.8))
+arr = np.asarray(scan_img).astype(np.float32) + rng.normal(0, 4, (3508, 2480))
+scan_img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "L")
+c = canvas.Canvas(f"{OUT}/doc_scan.pdf", pagesize=A4)
+c.drawImage(jpeg_reader(scan_img, 85), 0, 0, width=W, height=H)
+c.showPage()
+c.save()
+
+# 9. Damaged xref: break startxref offset
 data = open(f"{OUT}/mixed.pdf", "rb").read()
 idx = data.rfind(b"startxref")
 broken = data[:idx] + b"startxref\n123\n%%EOF\n"

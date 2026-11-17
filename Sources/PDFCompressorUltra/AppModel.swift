@@ -34,7 +34,8 @@ final class AppModel: ObservableObject {
         /// Master mode selections (0-based page indices / image object numbers).
         var protectedPages: Set<Int> = []
         var protectedImages: Set<Int> = []
-        var protectedCount: Int { protectedPages.count + protectedImages.count }
+        var pageColorModes: [Int: ColorMode] = [:]
+        var protectedCount: Int { protectedPages.count + protectedImages.count + pageColorModes.count }
     }
 
     enum OutputMode: String, CaseIterable, Identifiable {
@@ -53,6 +54,7 @@ final class AppModel: ObservableObject {
     @Published var passwordRequest: FileItem.ID? = nil
     @Published var masterFile: FileItem.ID? = nil
     @Published var masterMode: Bool { didSet { save() } }
+    @Published var colorMode: ColorMode { didSet { save() } }
 
     @Published var preset: CompressionPreset { didSet { save() } }
     @Published var manualDPI: Double { didSet { save() } }
@@ -73,6 +75,7 @@ final class AppModel: ObservableObject {
         outputFolder = defaults.url(forKey: "outputFolder")
         suffix = defaults.string(forKey: "suffix") ?? "_compressed"
         masterMode = defaults.object(forKey: "masterMode") as? Bool ?? false
+        colorMode = ColorMode(rawValue: defaults.string(forKey: "colorMode") ?? "") ?? .color
     }
 
     private func save() {
@@ -84,12 +87,14 @@ final class AppModel: ObservableObject {
         defaults.set(outputFolder, forKey: "outputFolder")
         defaults.set(suffix, forKey: "suffix")
         defaults.set(masterMode, forKey: "masterMode")
+        defaults.set(colorMode.rawValue, forKey: "colorMode")
     }
 
     var settings: CompressionSettings {
         var s = CompressionSettings(preset: preset,
                                     manualDPI: Int(manualDPI.rounded()), manualQuality: Int(manualQuality.rounded()))
         s.removeEditorData = removeEditorData
+        s.colorMode = colorMode
         return s
     }
 
@@ -213,6 +218,7 @@ final class AppModel: ObservableObject {
                 if masterMode {
                     settings.protectedPages = item.protectedPages
                     settings.protectedImages = item.protectedImages
+                    settings.pageColorModes = item.pageColorModes
                 }
                 files[idx].status = .working(0, "Подготовка…")
                 let result: Result<CompressionReport, Error> = await Task.detached(priority: .userInitiated) { () -> Result<CompressionReport, Error> in
@@ -243,10 +249,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setProtection(_ id: FileItem.ID, pages: Set<Int>, images: Set<Int>) {
+    func setProtection(_ id: FileItem.ID, pages: Set<Int>, images: Set<Int>, colorModes: [Int: ColorMode]) {
         guard let i = files.firstIndex(where: { $0.id == id }) else { return }
         files[i].protectedPages = pages
         files[i].protectedImages = images
+        files[i].pageColorModes = colorModes
         if case .done = files[i].status { files[i].status = .pending }
     }
 

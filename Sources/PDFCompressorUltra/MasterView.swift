@@ -15,6 +15,7 @@ struct MasterView: View {
     @State private var selected = 0
     @State private var protectedPages: Set<Int> = []
     @State private var protectedImages: Set<Int> = []
+    @State private var pageModes: [Int: ColorMode] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,13 +64,14 @@ struct MasterView: View {
             Button("Снять всё") {
                 protectedPages = []
                 protectedImages = []
+                pageModes = [:]
             }
             Spacer()
             Text(summary).font(.callout).foregroundStyle(.secondary)
             Button("Отмена") { model.masterFile = nil }
                 .keyboardShortcut(.cancelAction)
             Button("Готово") {
-                model.setProtection(item.id, pages: protectedPages, images: protectedImages)
+                model.setProtection(item.id, pages: protectedPages, images: protectedImages, colorModes: pageModes)
                 model.masterFile = nil
             }
             .keyboardShortcut(.defaultAction)
@@ -81,7 +83,9 @@ struct MasterView: View {
         var parts: [String] = []
         if !protectedPages.isEmpty { parts.append("страниц: \(protectedPages.count)") }
         if !protectedImages.isEmpty { parts.append("изображений: \(protectedImages.count)") }
-        return parts.isEmpty ? "Сжимается всё" : "Не сжимать — " + parts.joined(separator: ", ")
+        var text = parts.isEmpty ? "Сжимается всё" : "Не сжимать — " + parts.joined(separator: ", ")
+        if !pageModes.isEmpty { text += " · свой цвет у страниц: \(pageModes.count)" }
+        return text
     }
 
     // MARK: Page list
@@ -94,6 +98,7 @@ struct MasterView: View {
                         PageThumb(page: pdf.page(at: i), index: i,
                                   imageCount: i < pages.count ? pages[i].images.count : 0,
                                   isSelected: i == selected,
+                                  mode: pageModes[i],
                                   isProtected: protectedPages.contains(i)
                                       || (i < pages.count && pages[i].images.contains { protectedImages.contains($0.objectNumber) }))
                             .id(i)
@@ -120,6 +125,13 @@ struct MasterView: View {
                 Button { if selected + 1 < pdf.pageCount { selected += 1 } } label: { Image(systemName: "chevron.right") }
                     .disabled(selected + 1 >= pdf.pageCount)
                 Spacer()
+                Picker("Цвет:", selection: Binding(
+                    get: { pageModes[selected] },
+                    set: { pageModes[selected] = $0 })) {
+                    Text("как в настройках (\(model.colorMode.title.lowercased()))").tag(ColorMode?.none)
+                    ForEach(ColorMode.allCases) { m in Text(m.title).tag(ColorMode?.some(m)) }
+                }
+                .frame(width: 330)
                 if info.images.isEmpty {
                     Text("Только текст и вектор — сжимается без потерь")
                         .font(.callout)
@@ -165,6 +177,7 @@ struct MasterView: View {
     private func load() async {
         protectedPages = item.protectedPages
         protectedImages = item.protectedImages
+        pageModes = item.pageColorModes
         let url = item.url
         let password = item.password
         let result: Result<[PageImagesInfo], Error> = await Task.detached(priority: .userInitiated) {
@@ -193,6 +206,7 @@ private struct PageThumb: View {
     let imageCount: Int
     let isSelected: Bool
     let isProtected: Bool
+    let mode: ColorMode?
     @State private var image: NSImage?
 
     var body: some View {
@@ -218,7 +232,8 @@ private struct PageThumb: View {
             }
             .padding(4)
             .background(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3))
-            Text(imageCount > 0 ? "\(index + 1) · изобр.: \(imageCount)" : "\(index + 1)")
+            Text((imageCount > 0 ? "\(index + 1) · изобр.: \(imageCount)" : "\(index + 1)")
+                 + (mode.map { " · \($0.title.lowercased())" } ?? ""))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

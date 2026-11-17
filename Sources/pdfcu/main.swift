@@ -12,6 +12,9 @@ func usage() -> Never {
           --dpi N           ручной выбор: разрешение изображений (точек на дюйм)
           --quality Q       ручной выбор: качество JPEG 1…100
           --keep-pages LIST  мастер-режим: не сжимать изображения на страницах (напр. 1,3,5-7)
+          --color MODE      color | gray | bw (ч/б 1 бит для текста, серое для фото)
+          --gray-pages LIST мастер-режим: эти страницы в оттенки серого
+          --bw-pages LIST   мастер-режим: эти страницы в ч/б 1 бит (принудительно)
           --list-images     показать изображения на страницах и выйти
       -v, --verbose         подробный отчёт по каждому изображению
           --lossless        только сжатие без потерь (изображения не перекодируются)
@@ -33,6 +36,8 @@ var quality: Int?
 var verbose = false
 var keepPages = Set<Int>()
 var listImages = false
+var colorMode = ColorMode.color
+var pageModes: [Int: ColorMode] = [:]
 
 func parsePages(_ s: String) -> Set<Int> {
     var r = Set<Int>()
@@ -78,6 +83,15 @@ while i < args.count {
     case "-v", "--verbose": verbose = true
     case "--keep-pages": keepPages = parsePages(value(&i))
     case "--list-images": listImages = true
+    case "--color":
+        switch value(&i) {
+        case "color": colorMode = .color
+        case "gray", "grey", "grayscale": colorMode = .grayscale
+        case "bw", "bilevel": colorMode = .bilevel
+        default: usage()
+        }
+    case "--gray-pages": for p in parsePages(value(&i)) { pageModes[p] = .grayscale }
+    case "--bw-pages": for p in parsePages(value(&i)) { pageModes[p] = .bilevel }
     case "--lossless": lossless = true
     case "--keep-editor-data": keepEditorData = true
     case "--password": password = value(&i)
@@ -102,6 +116,8 @@ if dpi != nil || quality != nil {
 }
 settings.lossyImages = !lossless
 settings.protectedPages = keepPages
+settings.colorMode = colorMode
+settings.pageColorModes = pageModes
 
 if listImages {
     do {
@@ -134,7 +150,7 @@ do {
     \(inURL.lastPathComponent) → \(outURL.lastPathComponent)
       размер:      \(fmt.string(fromByteCount: Int64(report.originalSize))) → \(fmt.string(fromByteCount: Int64(report.compressedSize))) (−\(String(format: "%.1f", report.savedFraction * 100))%)
       страниц:     \(report.pageCount), с изображениями: \(report.pagesWithImages)
-      изображений: \(report.imagesFound), перекодировано: \(report.imagesRecompressed), уменьшено: \(report.imagesDownsampled)
+      изображений: \(report.imagesFound), перекодировано: \(report.imagesRecompressed), уменьшено: \(report.imagesDownsampled), в серое: \(report.imagesToGray), ч/б: \(report.imagesToBilevel)
       прочих потоков пересжато без потерь: \(report.streamsOptimized)
       настройки:   \(settings.dpi) dpi, качество JPEGli \(settings.quality)%\(settings.lossyImages ? "" : ", без потерь")
       время:       \(String(format: "%.2f", Date().timeIntervalSince(start))) с

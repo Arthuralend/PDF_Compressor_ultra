@@ -28,6 +28,8 @@ CONFIGS = [
     ("manual-200-85", ["--dpi", "200", "--quality", "85"]),
     ("lossless", ["--lossless"]),
     ("keep-page-2", ["-p", "strong", "--keep-pages", "2"]),
+    ("gray", ["-p", "optimal", "--color", "gray"]),
+    ("bw", ["-p", "optimal", "--color", "bw"]),
 ]
 # Images in these files must get smaller (resolution really reduced) at "strong".
 MUST_SHRINK = {"mixed.pdf": 0.5, "scan.pdf": 0.5, "cmyk.pdf": 0.5, "objstm.pdf": 0.5, "pattern_images.pdf": 0.5}
@@ -95,16 +97,41 @@ for name in sorted(os.listdir(FIX)):
         if out_text != ref_text:
             failures.append(f"{name} [{cfg}]: extracted text differs")
         out_pages = render(dst)
-        worst = min(psnr(a, b) for a, b in zip(ref_pages, out_pages))
+        if cfg in ("gray", "bw"):
+            # no color may remain on the page
+            for k, op in enumerate(out_pages):
+                chroma = float(np.percentile(np.abs(op[..., 0] - op[..., 1]) + np.abs(op[..., 1] - op[..., 2]), 99.9))
+                if chroma > 12:
+                    failures.append(f"{name} [{cfg}]: page {k + 1} still has color (chroma {chroma:.0f})")
+            to_gray = lambda p: np.repeat((0.299 * p[..., 0] + 0.587 * p[..., 1] + 0.114 * p[..., 2])[..., None], 3, 2)
+            ref_cmp = [to_gray(p) for p in ref_pages]
+        else:
+            ref_cmp = ref_pages
+        worst = min(psnr(a, b) for a, b in zip(ref_cmp, out_pages))
         limit = 18.0
         if cfg == "lossless" or name == "text_only.pdf":
             limit = 99.0 if name == "text_only.pdf" else 40.0
+        if cfg == "gray":
+            limit = 22.0
+        if cfg == "bw":
+            limit = 12.0  # thresholding changes the look of scans by design
         if worst < limit:
             failures.append(f"{name} [{cfg}]: render PSNR {worst:.1f} dB < {limit}")
         if cfg == "keep-page-2" and len(ref_pages) >= 2:
             q2 = psnr(ref_pages[1], out_pages[1])
             if q2 < 60:
                 failures.append(f"{name} [{cfg}]: protected page 2 changed (PSNR {q2:.1f})")
+        if cfg == "bw":
+            with pikepdf.open(dst) as pdf:
+                filters = set()
+                for page in pdf.pages:
+                    for _, img in page.images.items():
+                        f = img.get("/Filter")
+                        filters.add(str(f))
+            if name == "doc_scan.pdf" and "/CCITTFaxDecode" not in filters:
+                failures.append(f"{name} [bw]: text scan was not converted to 1-bit CCITT ({filters})")
+            if name in ("scan.pdf", "mixed.pdf") and "/CCITTFaxDecode" in filters:
+                failures.append(f"{name} [bw]: photo was wrongly converted to 1-bit")
         a, b = os.path.getsize(src), os.path.getsize(dst)
         if cfg == "strong" and name in MUST_SHRINK and b > a * MUST_SHRINK[name]:
             failures.append(f"{name} [{cfg}]: only {100 * (1 - b / a):.0f}% smaller — images not downsampled?")
@@ -121,6 +148,11 @@ if os.path.exists(pat):
 print(f"{'file':20s} {'config':16s} {'orig KB':>9s} {'new KB':>9s} {'saved':>7s} {'PSNR':>6s}")
 for name, cfg, a, b, q in rows:
     print(f"{name:20s} {cfg:16s} {a / 1024:9.1f} {b / 1024:9.1f} {100 * (1 - b / a):6.1f}% {q:6.1f}")
+
+sizes = {(n, c): b for n, c, a, b, q in rows}
+if ("doc_scan.pdf", "bw") in sizes and ("doc_scan.pdf", "optimal") in sizes:
+    print(f"doc_scan: optimal {sizes[('doc_scan.pdf', 'optimal')] / 1024:.0f} KB, "
+          f"gray {sizes.get(('doc_scan.pdf', 'gray'), 0) / 1024:.0f} KB, bw {sizes[('doc_scan.pdf', 'bw')] / 1024:.0f} KB")
 
 if failures:
     print("\nFAILURES:")

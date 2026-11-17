@@ -65,6 +65,36 @@ public enum PDFCompressor {
             for (num, _) in analyzer.pagePlacements[p] { protectedImages.insert(num) }
         }
 
+        // Color modes: per page (master mode) or for the whole document.
+        func pageMode(_ i: Int) -> ColorMode { settings.pageColorModes[i] ?? settings.colorMode }
+        var imageModes: [Int: (mode: ColorMode, forced: Bool)] = [:]
+        for (i, placements) in analyzer.pagePlacements.enumerated() {
+            let m = pageMode(i)
+            let forced = settings.pageColorModes[i] == .bilevel
+            for (num, _) in placements {
+                if let old = imageModes[num] {
+                    // the "most colorful" page wins for shared images
+                    let rank: [ColorMode: Int] = [.color: 2, .grayscale: 1, .bilevel: 0]
+                    if rank[m]! > rank[old.mode]! { imageModes[num] = (mode: m, forced: false) }
+                    else if m == old.mode { imageModes[num] = (mode: m, forced: old.forced && forced) }
+                } else {
+                    imageModes[num] = (mode: m, forced: forced)
+                }
+            }
+        }
+        // Text and vector graphics of non-color pages become gray.
+        if (0..<pages.count).contains(where: { pageMode($0) != .color }) {
+            progress?(0.11, "Перевод в оттенки серого…")
+            let converter = ContentGrayConverter(doc: doc)
+            for (i, page) in pages.enumerated() where pageMode(i) != .color { converter.convertPage(page) }
+            for (num, data) in converter.results {
+                guard case .stream(var s)? = table[num] else { continue }
+                s.dict.remove("Filter", "DecodeParms", "DP", "DL")
+                s.data = data
+                table[num] = .stream(s)
+            }
+        }
+
         // 3. Build jobs (serial: resolving touches the document cache).
         var maskNums = Set<Int>()
         var matteImages = Set<Int>()
@@ -94,9 +124,13 @@ public enum PDFCompressor {
             }
             if isImage {
                 report.imagesFound += 1
-                jobs.append(.image(makeImageJob(num: num, stream: s, filters: filters, parms: parms, doc: doc,
-                                                usage: analyzer.usage[num], settings: settings,
-                                                isMask: maskNums.contains(num), hasMatte: matteImages.contains(num))))
+                var job = makeImageJob(num: num, stream: s, filters: filters, parms: parms, doc: doc,
+                                       usage: analyzer.usage[num], settings: settings,
+                                       isMask: maskNums.contains(num), hasMatte: matteImages.contains(num))
+                let m = imageModes[num] ?? (mode: settings.colorMode, forced: false)
+                job.colorMode = m.mode
+                job.bilevelForced = m.forced
+                jobs.append(.image(job))
             } else {
                 jobs.append(.generic(num: num, stream: s, filters: filters, parms: parms))
             }
@@ -129,6 +163,8 @@ public enum PDFCompressor {
             if let reason = r.skipReason { report.skipped[reason, default: 0] += 1 }
             guard let ns = r.stream else { continue }
             table[r.num] = .stream(ns)
+            if r.conversion == .grayscale { report.imagesToGray += 1 }
+            if r.conversion == .bilevel { report.imagesToBilevel += 1 }
             if r.isImage {
                 report.imagesRecompressed += 1
                 if r.downsampled { report.imagesDownsampled += 1 }
@@ -368,6 +404,14 @@ public enum PDFCompressor {
         var targetWidth: Int
         var targetHeight: Int
         var smaskInData: Bool
+        var colorMode: ColorMode = .color
+        var bilevelForced = false
+        /// The /Decode array (non-indexed images), applied when converting to gray.
+        var decode: [Double]? = nil
+        /// Color space can be converted to gray (gray/RGB/CMYK families).
+        var grayConvertible = false
+        var bilevelWidth = 0
+        var bilevelHeight = 0
     }
 
     enum Job {
@@ -382,6 +426,7 @@ public enum PDFCompressor {
         var downsampled: Bool
         var log: String?
         var skipReason: String?
+        var conversion: ColorMode? = nil
     }
 
     private static func deviceComps(_ name: String) -> Int? {
@@ -473,10 +518,38 @@ public enum PDFCompressor {
             if ppiX > target * 1.05 { tw = max(1, Int((Double(width) * target / ppiX).rounded(.up))) }
             if ppiY > target * 1.05 { th = max(1, Int((Double(height) * target / ppiY).rounded(.up))) }
         }
-        return ImageJob(num: num, stream: s, filters: filters, parms: parms, width: width, height: height, bpc: bpc,
-                        color: color, imageMask: imageMask, defaultDecode: defaultDecode, isMask: isMask,
-                        hasMatte: hasMatte, colorKeyMask: colorKeyMask, placed: placed, ppi: ppi,
-                        targetWidth: tw, targetHeight: th, smaskInData: smaskInData)
+        var job = ImageJob(num: num, stream: s, filters: filters, parms: parms, width: width, height: height, bpc: bpc,
+                           color: color, imageMask: imageMask, defaultDecode: defaultDecode, isMask: isMask,
+                           hasMatte: hasMatte, colorKeyMask: colorKeyMask, placed: placed, ppi: ppi,
+                           targetWidth: tw, targetHeight: th, smaskInData: smaskInData)
+        if let dec = doc.resolve(d["Decode"] ?? .null).arrayValue, !(color?.isIndexed ?? false) {
+            job.decode = dec.compactMap { doc.resolve($0).doubleValue }
+        }
+        job.grayConvertible = grayConvertible(d["ColorSpace"], doc: doc)
+        // 1-bit images keep a higher resolution (text must stay sharp)
+        job.bilevelWidth = width
+        job.bilevelHeight = height
+        if let u = usage, placed, width > 0, height > 0 {
+            let target = Double(max(settings.bilevelDPI, settings.dpi))
+            let ppiX = Double(width) / (u.maxWidthPt / 72), ppiY = Double(height) / (u.maxHeightPt / 72)
+            if ppiX > target * 1.05 { job.bilevelWidth = max(1, Int((Double(width) * target / ppiX).rounded(.up))) }
+            if ppiY > target * 1.05 { job.bilevelHeight = max(1, Int((Double(height) * target / ppiY).rounded(.up))) }
+        }
+        return job
+    }
+
+    /// Gray, RGB and CMYK families (incl. ICC, Cal*, Indexed over them, or no
+    /// color space for JPEG / JPEG 2000) can be converted to gray.
+    private static func grayConvertible(_ cs: PDFObject?, doc: PDFDocumentModel) -> Bool {
+        guard let cs = cs else { return true }
+        let r = doc.resolve(cs)
+        if let n = r.nameValue { return ["DeviceGray", "G", "DeviceRGB", "RGB", "DeviceCMYK", "CMYK"].contains(n) }
+        guard let a = r.arrayValue, let fam = a.first.map(doc.resolve)?.nameValue else { return false }
+        switch fam {
+        case "ICCBased", "CalRGB", "CalGray", "DeviceGray", "DeviceRGB", "DeviceCMYK": return true
+        case "Indexed", "I": return a.count >= 2 && grayConvertible(a[1], doc: doc)
+        default: return false
+        }
     }
 
     static func process(_ job: Job, settings: CompressionSettings) -> JobResult {
@@ -492,7 +565,8 @@ public enum PDFCompressor {
             switch outcome {
             case .success(let r):
                 var r = r
-                let what = r.downsampled ? "уменьшено до \(r.stream?.dict.int("Width") ?? 0)×\(r.stream?.dict.int("Height") ?? 0)" : "пересжато"
+                let conv = r.conversion == .bilevel ? "ч/б 1 бит (CCITT G4), " : (r.conversion == .grayscale ? "в оттенки серого, " : "")
+                let what = conv + (r.downsampled ? "уменьшено до \(r.stream?.dict.int("Width") ?? 0)×\(r.stream?.dict.int("Height") ?? 0)" : "пересжато")
                 r.log = "\(head): \(what), \(j.stream.data.count / 1024) → \((r.stream?.data.count ?? 0) / 1024) КБ"
                 return r
             case .failure(let reason):
@@ -568,7 +642,8 @@ public enum PDFCompressor {
         if j.colorKeyMask { return .failure(SkipReason("маска по цвету (сохраняется без потерь)")) }
         if j.smaskInData { return .failure(SkipReason("JPEG 2000 со встроенной прозрачностью")) }
         let needsResample = !j.hasMatte && (j.targetWidth < j.width || j.targetHeight < j.height)
-        if !settings.lossyImages && !needsResample { return .failure(SkipReason("режим без потерь")) }
+        let wantsGray = j.colorMode != .color && j.grayConvertible && !j.hasMatte
+        if !settings.lossyImages && !needsResample && !wantsGray { return .failure(SkipReason("режим без потерь")) }
         let dec: DecodedStream
         do {
             dec = try Filters.decode(j.stream.data, filters: j.filters, parms: j.parms, resolve: { $0 })
@@ -625,6 +700,35 @@ public enum PDFCompressor {
             return .failure(SkipReason("формат \(rest.joined(separator: "+")) (сохраняется как есть)"))
         }
 
+        // Color modes: gray, or 1-bit black & white (CCITT G4) for text-like images.
+        var converted: ColorMode? = nil
+        if wantsGray && !(j.colorMode == .grayscale && raster.components == 1) {
+            let gray = raster.toGray(decode: keepDecode ? j.decode : nil)
+            if j.colorMode == .bilevel && (j.bilevelForced || gray.looksLikeText()) {
+                let g = gray.resized(width: j.bilevelWidth, height: j.bilevelHeight)
+                let bits = g.binarized()
+                guard let g4 = CCITT.encodeG4(bits, width: g.width, height: g.height) else {
+                    return .failure(SkipReason("ошибка кодирования CCITT G4"))
+                }
+                var d = j.stream.dict
+                d.remove("Filter", "DecodeParms", "DP", "Length", "DL", "SMaskInData", "Decode", "Intent")
+                d["Width"] = .int(g.width)
+                d["Height"] = .int(g.height)
+                d["BitsPerComponent"] = .int(1)
+                d["ColorSpace"] = .name("DeviceGray")
+                d["Filter"] = .name("CCITTFaxDecode")
+                d["DecodeParms"] = .dict(PDFDict([("K", .int(-1)), ("Columns", .int(g.width)), ("Rows", .int(g.height))]))
+                return .success(JobResult(num: j.num, stream: PDFStream(dict: d, data: g4), isImage: true,
+                                          downsampled: g.width < j.width || g.height < j.height,
+                                          log: nil, skipReason: nil, conversion: .bilevel))
+            }
+            raster = gray
+            colorObject = .name("DeviceGray")
+            keepDecode = false
+            adobe = false
+            converted = .grayscale
+        }
+
         var downsampled = false
         if needsResample {
             raster = raster.resized(width: j.targetWidth, height: j.targetHeight)
@@ -643,7 +747,7 @@ public enum PDFCompressor {
             if encoded != nil { filter = "DCTDecode" }
         }
         if encoded == nil {
-            guard downsampled else {
+            guard downsampled || converted != nil else {
                 if !settings.lossyImages { return .failure(SkipReason("режим без потерь")) }
                 if paletteSize <= 64 { return .failure(SkipReason("мало цветов (графика, сохраняется без потерь)")) }
                 if !cmykOK { return .failure(SkipReason("CMYK без JPEG (сохраняется без потерь)")) }
@@ -659,7 +763,7 @@ public enum PDFCompressor {
         }
         guard let data = encoded else { return .failure(SkipReason("ошибка сжатия")) }
         // Without downsampling keep the original unless we gain at least 5 %.
-        let limit = downsampled ? 1.0 : 0.95
+        let limit = converted != nil ? Double.infinity : (downsampled ? 1.0 : 0.95)
         guard Double(data.count) < Double(j.stream.data.count) * limit else {
             if downsampled { return .failure(SkipReason("после уменьшения файл не стал меньше")) }
             if !j.placed { return .failure(SkipReason("не нарисовано на страницах напрямую, уже сжато")) }
@@ -676,7 +780,7 @@ public enum PDFCompressor {
         d["Filter"] = .name(filter)
         if !parms.isNull { d["DecodeParms"] = parms }
         return .success(JobResult(num: j.num, stream: PDFStream(dict: d, data: data), isImage: true,
-                                  downsampled: downsampled, log: nil, skipReason: nil))
+                                  downsampled: downsampled, log: nil, skipReason: nil, conversion: converted))
     }
 
     /// Unpacks raw PDF image samples into an 8-bit raster (palettes expanded).

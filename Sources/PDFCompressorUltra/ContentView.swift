@@ -75,6 +75,19 @@ struct SettingsPanel: View {
                     }
                 }
 
+                section("Цвет") {
+                    Picker("", selection: $model.colorMode) {
+                        ForEach(ColorMode.allCases) { m in Text(m.title).tag(m) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .disabled(model.isProcessing)
+                    Text(colorHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 section("Кодек изображений") {
                     Text(codecHint)
                         .font(.caption)
@@ -135,6 +148,17 @@ struct SettingsPanel: View {
             .padding(18)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var colorHint: String {
+        switch model.colorMode {
+        case .color:
+            return "Цвета не меняются."
+        case .grayscale:
+            return "Изображения, текст и векторная графика становятся серыми. Изображения — примерно на 20–35% меньше."
+        case .bilevel:
+            return "Сканы текста → чёрно-белые 1 бит, 300 dpi, CCITT G4 (в 5–20 раз меньше). Фотографии определяются автоматически и становятся серыми. В мастер-режиме можно выбрать режим для каждой страницы."
+        }
     }
 
     private var codecHint: String {
@@ -383,6 +407,8 @@ struct FileRow: View {
             parts.append("без изображений — сжатие без потерь")
         }
         if r.imagesDownsampled > 0 { parts.append("уменьшено разрешение: \(r.imagesDownsampled)") }
+        if r.imagesToBilevel > 0 { parts.append("ч/б 1 бит: \(r.imagesToBilevel)") }
+        if r.imagesToGray > 0 { parts.append("в серое: \(r.imagesToGray)") }
         if let n = r.codecNote { parts.append(n) }
         return parts.joined(separator: " · ")
     }

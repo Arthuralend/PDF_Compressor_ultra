@@ -42,6 +42,14 @@ int ccodecs_jpegli_decode(const uint8_t *data, size_t len, int color_transform,
                           uint8_t **out, int *width, int *height,
                           int *components, int *adobe_marker);
 
+/* ---- CCITT Group 4 ------------------------------------------------------ */
+
+/* Encodes a bilevel image (one byte per pixel, 1 = black, 0 = white) with
+   CCITT G4 (T.6), EOFB terminated. PDF: /CCITTFaxDecode with /K -1
+   /Columns width /Rows height (BlackIs1 false). */
+int ccodecs_ccitt_g4_encode(const uint8_t *pixels, int width, int height,
+                            uint8_t **out, size_t *out_len);
+
 void ccodecs_free(void *p);
 
 #ifdef __cplusplus
