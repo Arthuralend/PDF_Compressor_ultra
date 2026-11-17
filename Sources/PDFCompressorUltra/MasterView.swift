@@ -98,9 +98,9 @@ struct MasterView: View {
                         PageThumb(page: pdf.page(at: i), index: i,
                                   imageCount: i < pages.count ? pages[i].images.count : 0,
                                   isSelected: i == selected,
-                                  mode: pageModes[i],
                                   isProtected: protectedPages.contains(i)
-                                      || (i < pages.count && pages[i].images.contains { protectedImages.contains($0.objectNumber) }))
+                                      || (i < pages.count && pages[i].images.contains { protectedImages.contains($0.objectNumber) }),
+                                  mode: pageModes[i])
                             .id(i)
                             .onTapGesture { selected = i }
                     }
