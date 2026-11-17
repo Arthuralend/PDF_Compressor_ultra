@@ -135,28 +135,33 @@ for name in sorted(os.listdir(FIX)):
             if name in ("scan.pdf", "mixed.pdf") and (filters & bilevel):
                 failures.append(f"{name} [bw]: photo was wrongly converted to 1-bit")
             if name == "doc_scan.pdf":
-                # cross-check with MuPDF (jbig2dec) and, on macOS, with Quartz (Preview)
+                # Cross-check decoding with MuPDF (jbig2dec) and, on macOS, with Quartz
+                # (Preview), at the native 300 dpi where one image pixel = one device pixel.
                 import fitz
-                pm = fitz.open(dst)[0].get_pixmap(dpi=72, colorspace=fitz.csGRAY)
-                mu = np.frombuffer(pm.samples, np.uint8).reshape(pm.height, pm.width).astype(np.float32)
-                ref = out_pages[0][..., 0]
-                h_, w_ = min(mu.shape[0], ref.shape[0]), min(mu.shape[1], ref.shape[1])
-                diff = float(np.mean(np.abs(mu[:h_, :w_] - ref[:h_, :w_]) > 64))
-                print(f"doc_scan bw: filters {filters}, MuPDF vs pdfium differing pixels {diff:.4f}")
-                if diff > 0.02:
-                    failures.append(f"{name} [bw]: MuPDF renders differently ({diff:.3f})")
+                ref = np.asarray(pdfium.PdfDocument(dst)[0].render(scale=300 / 72).to_pil().convert("L")) < 128
+                pm = fitz.open(dst)[0].get_pixmap(dpi=300, colorspace=fitz.csGRAY)
+                mu = np.frombuffer(pm.samples, np.uint8).reshape(pm.height, pm.width) < 128
+                def mismatch(a, b):
+                    h_, w_ = min(a.shape[0], b.shape[0]), min(a.shape[1], b.shape[1])
+                    return float(np.mean(a[:h_, :w_] != b[:h_, :w_]))
+                diff = mismatch(mu, ref)
+                print(f"doc_scan bw: filters {filters}, MuPDF vs pdfium differing pixels {diff:.5f}")
+                if diff > 0.005:
+                    failures.append(f"{name} [bw]: MuPDF renders differently ({diff:.4f})")
                 if sys.platform == "darwin":
                     png = dst + ".quartz.png"
-                    subprocess.run(["sips", "-s", "format", "png", dst, "--out", png], capture_output=True)
+                    here = os.path.dirname(os.path.abspath(__file__))
+                    subprocess.run(["swift", os.path.join(here, "quartz_render.swift"), dst, png, "300"],
+                                   capture_output=True)
                     if not os.path.exists(png):
                         failures.append(f"{name} [bw]: Quartz could not render the result")
                     else:
                         from PIL import Image as _I
-                        q = np.asarray(_I.open(png).convert("L").resize((ref.shape[1], ref.shape[0])), dtype=np.float32)
-                        qd = float(np.mean(np.abs(q - ref) > 64))
-                        print(f"doc_scan bw: Quartz vs pdfium differing pixels {qd:.4f}")
-                        if qd > 0.03:
-                            failures.append(f"{name} [bw]: Quartz renders differently ({qd:.3f})")
+                        q = np.asarray(_I.open(png).convert("L")) < 128
+                        qd = mismatch(q, ref)
+                        print(f"doc_scan bw: Quartz vs pdfium differing pixels {qd:.5f}")
+                        if qd > 0.005:
+                            failures.append(f"{name} [bw]: Quartz renders differently ({qd:.4f})")
         a, b = os.path.getsize(src), os.path.getsize(dst)
         if cfg == "strong" and name in MUST_SHRINK and b > a * MUST_SHRINK[name]:
             failures.append(f"{name} [{cfg}]: only {100 * (1 - b / a):.0f}% smaller — images not downsampled?")
