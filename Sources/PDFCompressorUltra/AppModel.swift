@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import PDFCore
+import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
