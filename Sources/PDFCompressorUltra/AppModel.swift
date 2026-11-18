@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
         let id = UUID()
         let url: URL
         let originalSize: Int
+        var addedIndex = 0
         var status: Status = .pending
         var password: String = ""
         /// Master mode selections (0-based page indices / image object numbers).
@@ -36,6 +37,20 @@ final class AppModel: ObservableObject {
         var protectedImages: Set<Int> = []
         var pageColorModes: [Int: ColorMode] = [:]
         var protectedCount: Int { protectedPages.count + protectedImages.count + pageColorModes.count }
+    }
+
+    enum SortKey: String, CaseIterable, Identifiable {
+        case added, name, size, saved, manual
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .added: return "По порядку добавления"
+            case .name: return "По имени"
+            case .size: return "По размеру"
+            case .saved: return "По экономии"
+            case .manual: return "Вручную"
+            }
+        }
     }
 
     enum OutputMode: String, CaseIterable, Identifiable {
@@ -55,6 +70,9 @@ final class AppModel: ObservableObject {
     @Published var masterFile: FileItem.ID? = nil
     @Published var masterMode: Bool { didSet { save() } }
     @Published var colorMode: ColorMode { didSet { save() } }
+    @Published var sortKey: SortKey { didSet { save(); applySort() } }
+    @Published var sortAscending: Bool { didSet { save(); applySort() } }
+    private var addCounter = 0
 
     @Published var preset: CompressionPreset { didSet { save() } }
     @Published var manualDPI: Double { didSet { save() } }
@@ -76,6 +94,8 @@ final class AppModel: ObservableObject {
         suffix = defaults.string(forKey: "suffix") ?? "_compressed"
         masterMode = defaults.object(forKey: "masterMode") as? Bool ?? false
         colorMode = ColorMode(rawValue: defaults.string(forKey: "colorMode") ?? "") ?? .color
+        sortKey = SortKey(rawValue: defaults.string(forKey: "sortKey") ?? "") ?? .added
+        sortAscending = defaults.object(forKey: "sortAscending") as? Bool ?? true
     }
 
     private func save() {
@@ -88,6 +108,8 @@ final class AppModel: ObservableObject {
         defaults.set(suffix, forKey: "suffix")
         defaults.set(masterMode, forKey: "masterMode")
         defaults.set(colorMode.rawValue, forKey: "colorMode")
+        defaults.set(sortKey.rawValue, forKey: "sortKey")
+        defaults.set(sortAscending, forKey: "sortAscending")
     }
 
     var settings: CompressionSettings {
@@ -119,8 +141,12 @@ final class AppModel: ObservableObject {
         }
         for url in found where !files.contains(where: { $0.url == url }) {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-            files.append(FileItem(url: url, originalSize: size))
+            var item = FileItem(url: url, originalSize: size)
+            addCounter += 1
+            item.addedIndex = addCounter
+            files.append(item)
         }
+        applySort()
     }
 
     func openPanel() {
@@ -142,6 +168,42 @@ final class AppModel: ObservableObject {
             outputFolder = url
             outputMode = .folder
         }
+    }
+
+    // MARK: Sorting
+
+    func applySort() {
+        guard sortKey != .manual else { return }
+        let asc = sortAscending
+        func ordered(_ a: FileItem, _ b: FileItem, _ less: Bool, _ equal: Bool) -> Bool {
+            if equal { return a.addedIndex < b.addedIndex }
+            return asc ? less : !less
+        }
+        func saved(_ f: FileItem) -> Double {
+            if case .done(let r, _) = f.status { return r.savedFraction }
+            return -1
+        }
+        switch sortKey {
+        case .added:
+            files.sort { asc ? $0.addedIndex < $1.addedIndex : $0.addedIndex > $1.addedIndex }
+        case .name:
+            files.sort { a, b in
+                let r = a.url.lastPathComponent.localizedStandardCompare(b.url.lastPathComponent)
+                return ordered(a, b, r == .orderedAscending, r == .orderedSame)
+            }
+        case .size:
+            files.sort { a, b in ordered(a, b, a.originalSize < b.originalSize, a.originalSize == b.originalSize) }
+        case .saved:
+            files.sort { a, b in ordered(a, b, saved(a) < saved(b), saved(a) == saved(b)) }
+        case .manual:
+            break
+        }
+    }
+
+    /// Drag & drop reordering in the list switches to manual order.
+    func move(from source: IndexSet, to destination: Int) {
+        files.move(fromOffsets: source, toOffset: destination)
+        if sortKey != .manual { sortKey = .manual }
     }
 
     func remove(_ id: FileItem.ID) {
@@ -238,6 +300,7 @@ final class AppModel: ObservableObject {
                 switch result {
                 case .success(let r):
                     files[j].status = .done(r, out)
+                    if sortKey == .saved { applySort() }
                 case .failure(let e as PDFError) where e.kind == .encrypted:
                     files[j].status = .needsPassword
                     if passwordRequest == nil { passwordRequest = id }

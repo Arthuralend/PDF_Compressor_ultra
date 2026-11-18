@@ -247,10 +247,13 @@ struct FilesPanel: View {
             if model.files.isEmpty {
                 dropZone
             } else {
+                sortBar
+                Divider()
                 List {
                     ForEach(model.files) { item in
                         FileRow(model: model, item: item)
                     }
+                    .onMove { from, to in model.move(from: from, to: to) }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
                 .overlay(
@@ -288,6 +291,29 @@ struct FilesPanel: View {
             )
         }
         .buttonStyle(.plain)
+    }
+
+    private var sortBar: some View {
+        HStack(spacing: 10) {
+            Text("Файлов: \(model.files.count) · \(bytes(model.files.reduce(0) { $0 + $1.originalSize }))")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Picker("Сортировка:", selection: $model.sortKey) {
+                ForEach(AppModel.SortKey.allCases) { k in Text(k.title).tag(k) }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+            Button {
+                model.sortAscending.toggle()
+            } label: {
+                Image(systemName: model.sortAscending ? "arrow.up" : "arrow.down")
+            }
+            .help(model.sortAscending ? "По возрастанию (нажмите — по убыванию)" : "По убыванию (нажмите — по возрастанию)")
+            .disabled(model.sortKey == .manual)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private var bottomBar: some View {
