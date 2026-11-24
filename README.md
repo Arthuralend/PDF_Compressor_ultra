@@ -97,6 +97,12 @@ SKIP_JPEGLI=1 ./Scripts/build_app.sh
 
 `open Package.swift` — схема `PDFCompressorUltra` (приложение) или `pdfcu` (командная строка).
 
+## Mac App Store
+
+Сборка для App Store (песочница, подписанный .pkg) — `Scripts/build_appstore.sh`,
+загрузка — workflow «App Store upload» в GitHub Actions. Пошаговая инструкция и тексты
+для страницы в магазине — в папке [`AppStore/`](AppStore/README.md).
+
 ## Командная строка
 
 В комплекте есть утилита `pdfcu` (`dist/pdfcu`, а также внутри .app):

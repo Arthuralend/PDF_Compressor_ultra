@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Needed when launched as a bare executable (swift run) instead of an .app bundle.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        // Restore folder permissions granted earlier (sandboxed App Store build).
+        Task { @MainActor in _ = FolderAccess.shared }
         if NSApp.applicationIconImage == nil || Bundle.main.bundleIdentifier == nil,
            let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
            let img = NSImage(contentsOf: url) {

@@ -166,6 +166,7 @@ final class AppModel: ObservableObject {
         panel.canCreateDirectories = true
         panel.prompt = "Выбрать"
         if panel.runModal() == .OK, let url = panel.url {
+            FolderAccess.shared.remember(url)
             outputFolder = url
             outputMode = .folder
         }
@@ -231,8 +232,12 @@ final class AppModel: ObservableObject {
 
     // MARK: Compression
 
-    private func outputURL(for input: URL) -> URL {
-        let dir = (outputMode == .folder ? outputFolder : nil) ?? input.deletingLastPathComponent()
+    /// Folder the result of `input` is written to (before sandbox permission checks).
+    private func targetFolder(for input: URL) -> URL {
+        (outputMode == .folder ? outputFolder : nil) ?? input.deletingLastPathComponent()
+    }
+
+    private func outputURL(for input: URL, in dir: URL) -> URL {
         let base = input.deletingPathExtension().lastPathComponent + suffix
         var candidate = dir.appendingPathComponent(base).appendingPathExtension("pdf")
         var n = 2
@@ -273,10 +278,21 @@ final class AppModel: ObservableObject {
         isProcessing = true
         let settings = self.settings
         Task {
+            // Sandbox (App Store build): make sure we may write to every target folder,
+            // asking the user once per folder.
+            var writable: [String: URL?] = [:]
             for id in ids {
                 guard let idx = files.firstIndex(where: { $0.id == id }) else { continue }
                 let item = files[idx]
-                let out = outputURL(for: item.url)
+                let wanted = targetFolder(for: item.url)
+                if writable[wanted.path] == nil {
+                    writable[wanted.path] = .some(FolderAccess.shared.writableFolder(for: wanted))
+                }
+                guard let dirOpt = writable[wanted.path], let dir = dirOpt else {
+                    files[idx].status = .failed("Нет доступа к папке «\(wanted.lastPathComponent)» — разрешите доступ или выберите папку для сохранения")
+                    continue
+                }
+                let out = outputURL(for: item.url, in: dir)
                 var settings = settings
                 if masterMode {
                     settings.protectedPages = item.protectedPages

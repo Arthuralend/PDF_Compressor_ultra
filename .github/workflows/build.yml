@@ -29,6 +29,9 @@ jobs:
       - name: Build app
         run: ./Scripts/build_app.sh
 
+      - name: Build App Store variant (sandboxed, test signature)
+        run: ./Scripts/build_appstore.sh
+
       - name: Test dependencies
         run: python3 -m pip install --break-system-packages -q reportlab pillow numpy pikepdf pypdfium2 pypdf pymupdf
 

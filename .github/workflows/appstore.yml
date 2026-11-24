@@ -1,0 +1,95 @@
+name: App Store upload
+
+# Manual: Actions → "App Store upload" → Run workflow.
+# Needs these repository secrets (Settings → Secrets and variables → Actions):
+#   APPSTORE_BUNDLE_ID          e.g. com.yourname.pdfcompressorultra
+#   APPSTORE_TEAM_ID            10-character Team ID
+#   APPSTORE_APP_CERT_P12       base64 of "Apple Distribution" (or "3rd Party Mac Developer Application") .p12
+#   APPSTORE_INSTALLER_CERT_P12 base64 of "3rd Party Mac Developer Installer" (Mac Installer Distribution) .p12
+#   APPSTORE_CERT_PASSWORD      password of both .p12 files
+#   APPSTORE_PROFILE            base64 of the Mac App Store .provisionprofile
+#   ASC_KEY_ID, ASC_ISSUER_ID   App Store Connect API key id / issuer id
+#   ASC_KEY_P8                  base64 of AuthKey_XXXX.p8
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (CFBundleShortVersionString)"
+        default: "1.0.0"
+        required: true
+      upload:
+        description: "Upload to App Store Connect"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  appstore:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache jpegli
+        uses: actions/cache@v4
+        with:
+          path: Vendor/jpegli
+          key: jpegli-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Scripts/build_jpegli.sh') }}
+
+      - name: Import certificates and profile
+        env:
+          APP_P12: ${{ secrets.APPSTORE_APP_CERT_P12 }}
+          INSTALLER_P12: ${{ secrets.APPSTORE_INSTALLER_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.APPSTORE_CERT_PASSWORD }}
+          PROFILE_B64: ${{ secrets.APPSTORE_PROFILE }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KC_PASS="$(uuidgen)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          echo "$APP_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          echo "$INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/app.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          echo "$PROFILE_B64" | base64 --decode > "$RUNNER_TEMP/profile.provisionprofile"
+          security find-identity -v "$KEYCHAIN"
+
+      - name: Build signed package
+        env:
+          BUNDLE_ID: ${{ secrets.APPSTORE_BUNDLE_ID }}
+          TEAM_ID: ${{ secrets.APPSTORE_TEAM_ID }}
+          VERSION: ${{ inputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          APP_IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -E 'Apple Distribution|3rd Party Mac Developer Application' | head -1 | sed -E 's/.*"(.*)"/\1/')"
+          INSTALLER_IDENTITY="$(security find-identity -v "$KEYCHAIN" | grep -E '3rd Party Mac Developer Installer|Mac Installer Distribution' | head -1 | sed -E 's/.*"(.*)"/\1/')"
+          export APP_IDENTITY INSTALLER_IDENTITY PROFILE="$RUNNER_TEMP/profile.provisionprofile"
+          echo "App: $APP_IDENTITY / Installer: $INSTALLER_IDENTITY"
+          ./Scripts/build_appstore.sh
+
+      - name: Upload to App Store Connect
+        if: inputs.upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$ASC_KEY_P8" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          PKG="$(ls dist/appstore/*.pkg | head -1)"
+          xcrun altool --validate-app -f "$PKG" -t macos --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          xcrun altool --upload-app -f "$PKG" -t macos --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Keep package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appstore-pkg
+          path: dist/appstore/*.pkg
+          if-no-files-found: ignore

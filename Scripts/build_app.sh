@@ -28,6 +28,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/PDFCompressorUltra" "$APP/Contents/MacOS/PDFCompressorUltra"
 cp "$BIN/pdfcu" "$APP/Contents/MacOS/pdfcu"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp Resources/Credits.rtf "$APP/Contents/Resources/Credits.rtf"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
