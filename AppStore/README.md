@@ -12,7 +12,7 @@ App Store, лицензии сторонних библиотек в окне «
 
 ## 2. Идентификатор приложения (Bundle ID)
 developer.apple.com → Certificates, IDs & Profiles → Identifiers → «+» → App IDs → App →
-Platform: macOS, Bundle ID (Explicit), например `com.ваше-имя.pdfcompressorultra`.
+Platform: macOS, Bundle ID (Explicit): `com.arthuralend.pdfcompressorultra` (создан).
 Дополнительные возможности (Capabilities) не нужны.
 
 ## 3. Сертификаты (нужны два)
@@ -44,7 +44,6 @@ App Store Connect → Пользователи и доступ → Интегр�
 
 | Секрет | Что положить |
 |---|---|
-| `APPSTORE_BUNDLE_ID` | Bundle ID из шага 2 |
 | `APPSTORE_TEAM_ID` | Team ID |
 | `APPSTORE_APP_CERT_P12` | base64 .p12 сертификата Apple Distribution |
 | `APPSTORE_INSTALLER_CERT_P12` | base64 .p12 сертификата Mac Installer Distribution |

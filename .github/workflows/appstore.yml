@@ -2,7 +2,6 @@ name: App Store upload
 
 # Manual: Actions → "App Store upload" → Run workflow.
 # Needs these repository secrets (Settings → Secrets and variables → Actions):
-#   APPSTORE_BUNDLE_ID          e.g. com.yourname.pdfcompressorultra
 #   APPSTORE_TEAM_ID            10-character Team ID
 #   APPSTORE_APP_CERT_P12       base64 of "Apple Distribution" (or "3rd Party Mac Developer Application") .p12
 #   APPSTORE_INSTALLER_CERT_P12 base64 of "3rd Party Mac Developer Installer" (Mac Installer Distribution) .p12
@@ -61,7 +60,7 @@ jobs:
 
       - name: Build signed package
         env:
-          BUNDLE_ID: ${{ secrets.APPSTORE_BUNDLE_ID }}
+          BUNDLE_ID: com.arthuralend.pdfcompressorultra
           TEAM_ID: ${{ secrets.APPSTORE_TEAM_ID }}
           VERSION: ${{ inputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}

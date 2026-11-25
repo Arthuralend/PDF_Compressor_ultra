@@ -19,7 +19,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 APP_NAME="PDF Compressor Ultra"
-BUNDLE_ID="${BUNDLE_ID:-app.pdfcompressorultra}"
+BUNDLE_ID="${BUNDLE_ID:-com.arthuralend.pdfcompressorultra}"
 VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 ARCH="${ARCH:-arm64}"
